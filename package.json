@@ -1,0 +1,22 @@
+{
+    "name": "akai-apc-mini-mk2",
+    "version": "0.1.0",
+    "description": "Web-midi wrapper for AKAI APC Mini Mk2",
+    "main": "src/index.js",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/tstriker/akai-apc-mini-mk2.git"
+    },
+    "keywords": [
+        "akai",
+        "apc mini mk2",
+        "web-midi",
+        "daw"
+    ],
+    "author": "Tom Striker",
+    "license": "MIT",
+    "bugs": {
+        "url": "https://github.com/tstriker/akai-apc-mini-mk2/issues"
+    },
+    "homepage": "https://github.com/tstriker/akai-apc-mini-mk2#readme"
+}
