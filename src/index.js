@@ -9,6 +9,7 @@ class APCMiniMk2 {
         this.control = null;
 
         this._initDone = false;
+        this._sysexEnabled = false;
 
         this._listeners = [];
 
@@ -24,9 +25,19 @@ class APCMiniMk2 {
                 get() {
                     return this._states[note] || false;
                 },
-                set: val => {
+                set: async val => {
                     if (JSON.stringify(val) == JSON.stringify(this._states[note])) {
                         return;
+                    }
+
+                    if (button.color == "rgb" && typeof val == "string") {
+                        if (this._sysexEnabled) {
+                            return this.paint([[note, note, val]]);
+                        } else {
+                            throw Error(
+                                "Setting RGB colors for pads works only when sysex is enabled. Call `.connect({sysex: true})`)"
+                            );
+                        }
                     }
 
                     let [color, brightness] = [val, val ? 6 : 0];
@@ -42,9 +53,9 @@ class APCMiniMk2 {
                     }
 
                     if (button.color == "rgb") {
-                        this.control.noteOn(note, color, brightness);
+                        await this.control.noteOn(note, color, brightness);
                     } else if (button.color == "single") {
-                        this.control.noteOn(note, val ? 127 : 0);
+                        await this.control.noteOn(note, val ? 127 : 0);
                     }
                 },
             };
@@ -55,14 +66,13 @@ class APCMiniMk2 {
 
         this._onMessage = this._onMessage.bind(this);
         this._onStateChange = this._onStateChange.bind(this);
-
-        window.mk2 = this;
     }
 
-    async connect() {
+    async connect(options = {}) {
         return new Promise(async resolve => {
             //let access = await navigator.requestMIDIAccess({sysex: true});
-            let access = await navigator.requestMIDIAccess(); // we are not using sysex rn
+            this._sysexEnabled = options.sysex;
+            let access = await navigator.requestMIDIAccess({sysex: options.sysex}); // we are not using sysex rn
             // MIDI devices that send you data.
             const inputs = access.inputs.values();
 
@@ -98,11 +108,27 @@ class APCMiniMk2 {
                         this[button] = false;
                     });
                     this._initDone = true;
+
                     resolve();
                 }
             };
             midiIn.addEventListener("statechange", tempListener);
         });
+    }
+
+    async paint(padColors) {
+        let colorHex = (color, idx) => parseInt(color.slice(idx, idx + 2), 16);
+        let colorSept = n => this.control.toMLSB(n);
+
+        let batchSize = 32;
+        for (let batch = 0; batch < padColors.length; batch += batchSize) {
+            let message = [];
+            padColors.slice(batch, batch + batchSize).forEach(([padFrom, padTo, color]) => {
+                let [r, g, b] = [colorHex(color, 1), colorHex(color, 3), colorHex(color, 5)];
+                message.push(padFrom, padTo, ...colorSept(r), ...colorSept(g), ...colorSept(b));
+            });
+            await this.control.sendSysexData(0x24, message);
+        }
     }
 
     addEventListener(eventType, listener) {
@@ -132,7 +158,7 @@ class APCMiniMk2 {
 
     _onMessage(message) {
         if (message.type == "sysex") {
-            this._handleSysexMessage(message.data);
+            this._dispatchEvent("sysex", message);
             return;
         }
 
@@ -151,12 +177,6 @@ class APCMiniMk2 {
                 ...button,
             });
         }
-    }
-
-    _handleSysexMessage(messageData) {
-        // sysex event (e.g. reading conf) not used right now
-        let [_start, _manufacturerID, _deviceID, _modelId, messageId, _msb, _lsb, ...data] = messageData;
-        console.log("sysex message received:", messageId, data.join(","));
     }
 
     _onStateChange(event) {
