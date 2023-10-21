@@ -128,7 +128,6 @@ export class MIDIControl {
         ];
         let tail = [0xf7];
         let message = [...head, ...data, ...tail];
-        //await new Promise(resolve => setTimeout(resolve));
         return this._sendData(message);
     }
 
@@ -143,7 +142,11 @@ export class MIDIControl {
     async _sendData(message) {
         if (this.connected && this.out) {
             // console.log("Sending:", message.map(num => "0x" + num.toString(16)).join(", "));
-            this.out.send(message);
+            try {
+                this.out.send(message);
+            } catch (error) {
+                console.error(error, message.map(num => "0x" + num.toString(16)).join(", "));
+            }
         }
     }
 
