@@ -22,6 +22,7 @@ class APCMiniMk2 {
     }
 
     _defineButtons() {
+        // pad keys and all buttons
         Object.values(MidiButtons).forEach(button => {
             if (button.key == "shift") {
                 // solo doesn't have a light
@@ -30,10 +31,10 @@ class APCMiniMk2 {
 
             let property = {
                 get() {
-                    return this._states[button.note];
+                    return this._states[button.key];
                 },
                 set: val => {
-                    if (JSON.stringify(val) == JSON.stringify(this._states[button.note])) {
+                    if (JSON.stringify(val) == JSON.stringify(this._states[button.key])) {
                         return;
                     }
 
@@ -46,7 +47,7 @@ class APCMiniMk2 {
                         [color, brightness] = val;
                     }
 
-                    this._states[button.note] = val;
+                    this._states[button.key] = val;
 
                     if (!this.connected) {
                         // we're not connected but we're not gonna shout about it as we already yelled on connect
@@ -63,6 +64,15 @@ class APCMiniMk2 {
 
             Object.defineProperty(this, button.note, property);
             Object.defineProperty(this, button.key, property);
+        });
+
+        // faders (read-only ofc)
+        Object.values(MidiCC).forEach(fader => {
+            Object.defineProperty(this, fader.key, {
+                get() {
+                    return this._states[fader.key];
+                },
+            });
         });
     }
 
@@ -83,7 +93,13 @@ class APCMiniMk2 {
             },
             onMessage: message => {
                 if (message.type == "sysex") {
-                    this._dispatchEvent("sysex", message);
+                    if (message.messageTypeId == 0x61) {
+                        message.data.forEach((fader, idx) => {
+                            this._states[`fader${idx}`] = fader;
+                        });
+                    } else {
+                        this._dispatchEvent("sysex", message);
+                    }
                     return;
                 }
 
@@ -91,8 +107,8 @@ class APCMiniMk2 {
 
                 if (message.type == "cc") {
                     // normalize the value and round to the 6th digit as that's far enough
-                    let prev = this._states[`cc-${button.note}`];
-                    this._states[`cc-${button.note}`] = message.value;
+                    let prev = this._states[button.key];
+                    this._states[button.key] = message.value;
                     this._dispatchEvent("cc", {...message, ...button, prevVal: prev});
                 } else {
                     // button press
@@ -104,10 +120,17 @@ class APCMiniMk2 {
             },
         });
         await this.control.connect();
-        await this.reset();
+
+        if (options.sysex) {
+            // if we have sysex enabled, sniff out the current slider states
+            // this.device.out.send([0xf0, 0x47, 0x7f, 0x4f, 0x60, 0x00, 0x04, 0x41, 0x09, 0x01, 0x04, 0xf7]);
+            this.control.sendSysex(0x60, [0x41, 0x09, 0x01, 0x04]);
+        }
+
+        this.reset();
     }
 
-    async reset() {
+    reset() {
         // turn all pads off
         Object.values(MidiButtons).forEach(button => {
             this[button.key] = 0;
@@ -234,8 +257,8 @@ for (let i = 0; i < 64; i++) {
 
 // sliders
 let MidiCC = Object.fromEntries(
-    ["s1", "s2", "s3", "s4", "s5", "s6", "s7", "s8", "s9"].map((slider, idx) => {
-        return [48 + idx, {key: slider}];
+    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((slider, idx) => {
+        return [48 + idx, {key: `fader${slider}`, type: "cc"}];
     })
 );
 
