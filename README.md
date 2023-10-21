@@ -8,31 +8,40 @@ In essence:
 3. Open up a web browser running your website with the library's code (note: chromium on linux currently broken)
 4. Profit!
 
-
 # Install
 
-```npm install akai-midimix```
-
-Alternatively, you can just copy the index.js from the repository into your project and import that.
+`npm install akai-apc-mini-mk2`
 
 # Initialization
+
 ```javascript
-import {MidiMix} from "akai-midimix";
+import APCMiniMk2 from "akai-apc-mini-mk2";
 
-const midi = new MidiMix();
-
-midi.connect().then(() => {
+let mk2 = new APCMiniMk2();
+mk2.connect({sysex: true}).then(() => {
     // run some commands right on startup (e.g. turning on the LEDs)
     console.log("Midi connected!");
-    midi.m1 = true; // will light up the m1 button - see below for layout
+
+    // light up the pad at cordinates [3,3].
+    mk2.pad33 = "#ff00ff";
+
+    // light up the volume button
+    mk2.volume = 1;
+
+    // and you can access fader values via `.fader[0-8]`
+    console.log("Current value of the lef-most fader:", mk2.fader0);
 });
 
 midi.addEventListener("cc", data => {
-    console.log("CC dial/slider turned", data);
+    console.log("CC fader changed", data);
 });
 
-midi.addEventListener("keydown", data => {
+midi.addEventListener("noteon", data => {
     console.log("Button press", data);
+});
+
+midi.addEventListener("noteoff", data => {
+    console.log("Button release", data);
 });
 ```
 
@@ -43,35 +52,20 @@ as any listeners you might have attached.
 This is especially useful if you are using hot-reload in your project, as otherwise the event listeners will
 just keep piling up.
 
-
-
 # Reading dial/slider states and toggling the LEDs
 
-Note: There doesn't seem to be any way to find out the initial state of the knobs when you connect to it. Luckily, that's what
-the "Send All" hardware button is there for - once connected, hit Send All, and the midimix will send an event per knob,
-and the library will have their state, too.
-Alternatively, the state for individual controls will be set when you physically poke them.
+Note: There doesn't seem to be any way to find out the initial state of the knobs when you connect to it.
 
 With the caveat above in mind, to get the dial state, simply go `midi.c1` and so on.
 
 All the buttons, with the exception of "Send All" and "Solo" have an LED that you can turn on.
 Simply set the value to true/false accordingly to the button: `midi.bank_left = true`.
 
-
 # Events
 
 Use midi instance's `addEventListener(eventType, callback)` and `removeEventListener(eventType, callback)` to
 subscribe to the events. Events:
 
-* `cc` - fired on slider/dial turn. The event data is `{code, keyCode, val, prevVal}`
-* `keydown` / `keyup` - fired when any of the buttons are pressed and released (with the exception of "send all").
-   The event data is `{key, code, keyCode}`, where key is the symbolic name, code is the hardware code, and keyCode
-   is key again, but in PascalCase. The event data is intentionally set so that you can have single handler for, both,
-   midi, and the keyboard.
-
-
-# Licence & Thanks
-
-This code is licenced under the MIT license,  so you can do with it whatever you want for whatever purpose.
-
-
+-   `cc` - fired on slider/dial turn. The event data is `{code, keyCode, val, prevVal}`
+-   `noteon` / `noteoff` - fired when any of the buttons are pressed and released.
+-   `sysex` - when the device sends a sysex message, you can trigger one by pressing Shift+Drum on the APC Mk2.
