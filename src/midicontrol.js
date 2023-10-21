@@ -1,7 +1,14 @@
-// a minimalistic wrapper around a midi in/out
-//
+// a minimalistic, generic, zero-dependency wrapper around a midi in/out
+// feel free to nab it if you find it useful!
+// MIT License, Tom Striker 2023
 
-export class Midi {
+export function toMLSB(val) {
+    let msb = Math.trunc(val / 128);
+    let lsb = val % 128;
+    return [msb, lsb];
+}
+
+export class MIDIControl {
     messages = {
         0x80: "noteOff", // 128
         0x90: "noteOn", // 144
@@ -13,22 +20,68 @@ export class Midi {
         0xf0: "sysex", // 240
     };
 
-    constructor(midiIn, midiOut, onMessage) {
-        this.in = midiIn;
-        this.out = midiOut;
-        this.onMessage = onMessage;
+    constructor(
+        options = {
+            sysex: false,
+            manufacturerID: 0x00,
+            deviceID: 0x00,
+            modelID: 0x00,
+            deviceCheck: () => true,
+            onMessage: () => null,
+            onStateChange: () => null,
+        }
+    ) {
+        this.interface = null;
+        this.in = null;
+        this.out = null;
+        this.connected = false;
+        this.options = options;
 
         this._onMidiMessage = this._onMidiMessage.bind(this);
-        this.in.addEventListener("midimessage", this._onMidiMessage);
+        this._onStateChange = this._onStateChange.bind(this);
 
         // create the send functions so we don't repeat ourselves all the time
         Object.entries(this.messages).forEach(([address, messageName]) => {
             if (messageName != "sysex") {
                 this[messageName] = async (key, value, channel = 0) => {
-                    await this.send(parseInt(address), key, value, channel);
+                    this.send(parseInt(address), key, value, channel);
                 };
             }
         });
+    }
+
+    async connect() {
+        this.interface = await navigator.requestMIDIAccess({sysex: this.options.sysex}); // we are not using sysex rn
+        this.interface.addEventListener("statechange", this._onStateChange);
+
+        let findPort = entries => {
+            for (let entry of entries) {
+                let port = entry[1];
+                if (this.options.deviceCheck(port)) {
+                    return port;
+                }
+            }
+        };
+
+        this.in = findPort(this.interface.inputs);
+        this.out = findPort(this.interface.outputs);
+
+        if (!this.in || !this.out) {
+            // this one's bit vague as right now the deviceCheck thing is a function with no device description
+            throw Error("Tried to connect to the MIDI device but didn't find one matching the criteria");
+        }
+
+        // connect to midimessage events
+        await this.in.open();
+        await this.out.open();
+        await this.in.addEventListener("midimessage", this._onMidiMessage);
+    }
+
+    _onStateChange(evt) {
+        // proxy for now; will do cleanup/reconnect later
+        // note - state events don't seem to be working on disconnect on Firefox rn.
+        this.connected = evt.port.state == "connected";
+        this.options.onStateChange(evt);
     }
 
     _onMidiMessage(midiMessage) {
@@ -43,25 +96,8 @@ export class Midi {
         } else if (messageName == "sysex") {
             this._handleSysexMessage(midiMessage.data);
         } else {
-            this.onMessage({type: messageName.toLowerCase(), channel, note: remaining[0], value: remaining[1]});
+            this.options.onMessage({type: messageName.toLowerCase(), channel, note: remaining[0], value: remaining[1]});
         }
-    }
-
-    toMLSB(val) {
-        let msb = Math.trunc(val / 128);
-        let lsb = val % 128;
-        return [msb, lsb];
-    }
-
-    async sendSysexData(messageTypeID, data) {
-        let msb = Math.trunc(data.length / 128);
-        let lsb = data.length % 128;
-        let head = [0xf0, 0x47, 0x7f, 0x4f, messageTypeID, msb, lsb];
-        let tail = [0xf7];
-        let message = [...head, ...data, ...tail];
-
-        // console.log("Sending:", message.map(num => "0x" + num.toString(16)).join(", "));
-        await this.out.send(message);
     }
 
     _handleSysexMessage(messageData) {
@@ -73,26 +109,56 @@ export class Midi {
         data.splice(data.length - 1, 1);
 
         // console.log("sysex message received:", messageTypeId, data.join(","));
-        this.onMessage({type: "sysex", messageTypeId, data});
+        this.options.onMessage({type: "sysex", messageTypeId, data});
     }
 
-    _onStateChange(event) {
-        this.connected = event.port.state == "connected";
+    async sendSysex(messageTypeID, data) {
+        // just pass in the messageTypeID and data, and the function will handle the rest
+        let msb = Math.trunc(data.length / 128);
+        let lsb = data.length % 128;
+
+        let head = [
+            0xf0,
+            this.options.manufacturerID,
+            this.options.deviceID,
+            this.options.modelID,
+            messageTypeID,
+            msb,
+            lsb,
+        ];
+        let tail = [0xf7];
+        let message = [...head, ...data, ...tail];
+        //await new Promise(resolve => setTimeout(resolve));
+        return this._sendData(message);
     }
 
-    async send(message, data1, data2, channel = 0) {
-        // raw send
-        // normally you would use the explicit functions
-        //console.log("ffff", this.out, message + channel, data1, data2);
-        await this.out.send([message + channel, data1, data2]);
+    send(messageType, data1, data2, channel = 0) {
+        // instead of using this func, consider using the explicit .noteOn, .noteOff, etc.
+        // All but sysex support format of [messageType, data1, data2]
+        // the channel in MIDI protocol is essentially emulated by appending it to messageType
+        // so if note-on is 144, sending note-on just on channel 6 is 144+6 = 150
+        return this._sendData([messageType + channel, data1, data2]);
     }
 
-    disconnect() {
+    async _sendData(message) {
+        if (this.connected && this.out) {
+            // console.log("Sending:", message.map(num => "0x" + num.toString(16)).join(", "));
+            this.out.send(message);
+        }
+    }
+
+    async disconnect() {
+        this.connected = false;
+
+        if (this.interface) {
+            this.interface.removeEventListener("statechange", this._onStateChange);
+            this.interface = null;
+        }
+
         if (this.in) {
-            this.in.removeEventListener("midimessage", this._onMessage);
-            this.in.removeEventListener("statechange", this._onStateChange);
-            this.in = null;
+            this.in.removeEventListener("midimessage", this._onMidiMessage);
             this.in.close();
+            this.in = null;
         }
         if (this.out) {
             this.out.close();

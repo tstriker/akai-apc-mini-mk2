@@ -1,6 +1,7 @@
-import * as midicontrol from "./midicontrol.js";
+import {MIDIControl, toMLSB} from "./midicontrol.js";
 import colors from "./colors.js";
 
+// a mere proxy - to the 128 colors spelled out in the basic mode
 export const Colors = colors;
 
 class APCMiniMk2 {
@@ -15,7 +16,13 @@ class APCMiniMk2 {
 
         // wrap toggles so that when the value is set, we send the signal to the MIDI light
         this._states = {};
-        Object.entries(MidiButtons).forEach(([note, button]) => {
+
+        // makes all buttons accessible by note as well as by key name
+        this._defineButtons();
+    }
+
+    _defineButtons() {
+        Object.values(MidiButtons).forEach(button => {
             if (button.key == "shift") {
                 // solo doesn't have a light
                 return;
@@ -23,21 +30,15 @@ class APCMiniMk2 {
 
             let property = {
                 get() {
-                    return this._states[note] || false;
+                    return this._states[button.note];
                 },
-                set: async val => {
-                    if (JSON.stringify(val) == JSON.stringify(this._states[note])) {
+                set: val => {
+                    if (JSON.stringify(val) == JSON.stringify(this._states[button.note])) {
                         return;
                     }
 
                     if (button.color == "rgb" && typeof val == "string") {
-                        if (this._sysexEnabled) {
-                            return this.paint([[note, note, val]]);
-                        } else {
-                            throw Error(
-                                "Setting RGB colors for pads works only when sysex is enabled. Call `.connect({sysex: true})`)"
-                            );
-                        }
+                        return this.fill([[button.note, button.note, val]]);
                     }
 
                     let [color, brightness] = [val, val ? 6 : 0];
@@ -45,7 +46,7 @@ class APCMiniMk2 {
                         [color, brightness] = val;
                     }
 
-                    this._states[note] = val;
+                    this._states[button.note] = val;
 
                     if (!this.connected) {
                         // we're not connected but we're not gonna shout about it as we already yelled on connect
@@ -53,81 +54,98 @@ class APCMiniMk2 {
                     }
 
                     if (button.color == "rgb") {
-                        await this.control.noteOn(note, color, brightness);
+                        this.control.noteOn(button.note, color, brightness);
                     } else if (button.color == "single") {
-                        await this.control.noteOn(note, val ? 127 : 0);
+                        this.control.noteOn(button.note, val ? 127 : 0);
                     }
                 },
             };
 
-            Object.defineProperty(this, note, property);
+            Object.defineProperty(this, button.note, property);
             Object.defineProperty(this, button.key, property);
         });
-
-        this._onMessage = this._onMessage.bind(this);
-        this._onStateChange = this._onStateChange.bind(this);
     }
 
-    async connect(options = {}) {
-        return new Promise(async resolve => {
-            //let access = await navigator.requestMIDIAccess({sysex: true});
-            this._sysexEnabled = options.sysex;
-            let access = await navigator.requestMIDIAccess({sysex: options.sysex}); // we are not using sysex rn
-            // MIDI devices that send you data.
-            const inputs = access.inputs.values();
+    async connect(
+        options = {
+            sysex: false, // set to true if you want to paint with RGB colors
+        }
+    ) {
+        this._sysexEnabled = options.sysex;
 
-            let midiIn;
-            for (let input = inputs.next(); input && !input.done; input = inputs.next()) {
-                if (input.value.name.indexOf("APC mini mk2 Contr") != -1) {
-                    midiIn = input.value;
+        this.control = new MIDIControl({
+            sysex: this._sysexEnabled,
+            manufacturerID: 0x47,
+            deviceID: 0x7f,
+            modelID: 0x4f,
+            deviceCheck: port => {
+                return port.name.indexOf("APC mini mk2 Contr") != -1;
+            },
+            onMessage: message => {
+                if (message.type == "sysex") {
+                    this._dispatchEvent("sysex", message);
+                    return;
                 }
-            }
 
-            if (!midiIn) {
-                console.error("Tried to connect to MIDI APC Mini Mk2 but didn't find one.");
-                return;
-            }
-            midiIn.addEventListener("statechange", this._onStateChange);
+                let button = message.type == "cc" ? MidiCC[message.note] : MidiButtons[message.note];
 
-            const outputs = access.outputs.values();
-            let midiOut;
-            for (let output = outputs.next(); output && !output.done; output = outputs.next()) {
-                if (output.value.name.indexOf("APC mini mk2 Contr") != -1) {
-                    midiOut = output.value;
+                if (message.type == "cc") {
+                    // normalize the value and round to the 6th digit as that's far enough
+                    let prev = this._states[`cc-${button.note}`];
+                    this._states[`cc-${button.note}`] = message.value;
+                    this._dispatchEvent("cc", {...message, ...button, prevVal: prev});
+                } else {
+                    // button press
+                    this._dispatchEvent(message.type, {...message, ...button});
                 }
-            }
+            },
+            onStateChange: event => {
+                this.connected = event.port.state == "connected";
+            },
+        });
+        await this.control.connect();
+        await this.reset();
+    }
 
-            this.control = new midicontrol.Midi(midiIn, midiOut, this._onMessage);
-
-            let tempListener = evt => {
-                if (evt.port.state == "connected") {
-                    midiIn.removeEventListener("statechange", tempListener);
-
-                    Object.keys(MidiButtons).forEach(button => {
-                        // reset the button lights on load
-                        this[button] = false;
-                    });
-                    this._initDone = true;
-
-                    resolve();
-                }
-            };
-            midiIn.addEventListener("statechange", tempListener);
+    async reset() {
+        // turn all pads off
+        Object.values(MidiButtons).forEach(button => {
+            this[button.key] = 0;
         });
     }
 
-    async paint(padColors) {
+    async fill(padColors) {
+        // fill
+
         let colorHex = (color, idx) => parseInt(color.slice(idx, idx + 2), 16);
-        let colorSept = n => this.control.toMLSB(n);
+
+        if (!this._sysexEnabled) {
+            throw Error(
+                "Setting RGB colors for pads works only when sysex is enabled. construct with `new APCMiniMK2({sysex: true})`"
+            );
+        }
 
         let batchSize = 32;
         for (let batch = 0; batch < padColors.length; batch += batchSize) {
             let message = [];
             padColors.slice(batch, batch + batchSize).forEach(([padFrom, padTo, color]) => {
                 let [r, g, b] = [colorHex(color, 1), colorHex(color, 3), colorHex(color, 5)];
-                message.push(padFrom, padTo, ...colorSept(r), ...colorSept(g), ...colorSept(b));
+                message.push(padFrom, padTo, ...toMLSB(r), ...toMLSB(g), ...toMLSB(b));
+
+                for (let j = padFrom; j <= padTo; j++) {
+                    if (Array.isArray(this._states[j]) && this._states[j][1] > 6) {
+                        // if the previous state has a blinker have to reset it back to zero
+                        // or else the sysex message won't take effect
+                        this[j] = 0;
+                    }
+                    this._states[j] = color;
+                }
             });
-            await this.control.sendSysexData(0x24, message);
+            // if you blast the sysex with lotsa messages all at once it will start dropping frames
+            // discussion here: https://github.com/WebAudio/web-midi-api/issues/158
+            // the best you can do is not blast, but if you do blast, use setInterval/setTimeout and manage the
+            // buffer yourself
+            this.control.sendSysex(0x24, message);
         }
     }
 
@@ -156,52 +174,16 @@ class APCMiniMk2 {
         });
     }
 
-    _onMessage(message) {
-        if (message.type == "sysex") {
-            this._dispatchEvent("sysex", message);
-            return;
-        }
-
-        let button = message.type == "cc" ? MidiCC[message.note] : MidiButtons[message.note];
-
-        if (message.type == "cc") {
-            // normalize the value and round to the 6th digit as that's far enough
-            let prev = this._states[`cc-${button.note}`];
-            this._states[`cc-${button.note}`] = message.value;
-            this._dispatchEvent("cc", {...message, ...button, prevVal: prev});
-        } else {
-            // button press
-
-            this._dispatchEvent(message.type == "noteon" ? "keydown" : "keyup", {
-                ...message,
-                ...button,
-            });
-        }
-    }
-
-    _onStateChange(event) {
-        this.connected = event.port.state == "connected";
-    }
-
-    disconnect() {
+    async disconnect() {
+        await this.reset();
+        this.control.disconnect();
         Object.keys(MidiButtons).forEach(button => {
             // clean up after ourselves and reset the buttons on unload
             this[button] = false;
         });
-
-        this.control.disconnect();
         this.connected = false;
         this._listeners = [];
     }
-
-    destroy() {
-        this.disconnect();
-    }
-}
-
-function round(val, precision = 0) {
-    // rounds the number to requested precision. how is this not part of stdlib
-    return Math.round(val * Math.pow(10, precision)) / Math.pow(10, precision);
 }
 
 let MidiButtons = {};
