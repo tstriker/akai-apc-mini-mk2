@@ -112,8 +112,12 @@ export class MIDIControl {
         this.options.onMessage({type: "sysex", messageTypeId, data});
     }
 
-    async sendSysex(messageTypeID, data) {
+    async sendSysex(messageTypeID, ...data) {
         // just pass in the messageTypeID and data, and the function will handle the rest
+        if (data.length == 1) {
+            data = data[0];
+        }
+
         let msb = Math.trunc(data.length / 128);
         let lsb = data.length % 128;
 
