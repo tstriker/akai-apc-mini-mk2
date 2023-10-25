@@ -147,7 +147,7 @@ class APCMiniMk2 {
             this.control.sendSysex(0x60, [0x41, 0x09, 0x01, 0x04]);
         }
 
-        if (options.reset) {
+        if (options.reset !== false) {
             this.reset();
         }
 
@@ -188,9 +188,6 @@ class APCMiniMk2 {
     startPaintLoop() {
         let x = 0;
         let inner = () => {
-            //console.log("eeee");
-            //let toPaint = Object.values(this.buttons).filter(button => button._changed);
-
             let fills = [];
 
             let curColor = null;
@@ -255,7 +252,7 @@ class APCMiniMk2 {
     reset() {
         // turn all pads off
         Object.values(this.buttons).forEach(button => {
-            this[button.key].color = 0;
+            this._setValue(button, 0);
         });
     }
 
