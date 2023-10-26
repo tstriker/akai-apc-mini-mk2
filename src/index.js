@@ -1,4 +1,4 @@
-import {MIDIControl, toMLSB} from "./midicontrol.js";
+import {MIDIControl, MIDIEvent, toMLSB} from "./midicontrol.js";
 import colors from "./colors.js";
 
 // a mere proxy - to the 128 colors spelled out in the basic mode
@@ -16,6 +16,11 @@ class Knob {
         this.y = y;
         this._val = null;
         this._changed = false;
+        this._pressed = false;
+    }
+
+    get pressed() {
+        return this.pressed;
     }
 }
 
@@ -32,6 +37,13 @@ class Pad extends Knob {
     type = "rgb";
 }
 
+function _dispatchEvent(mk2, eventType, detail) {
+    // we interpret midi controller events similar to how you would handle keyboard events - they can work on
+    // the currently focused element that can intercept the event, as well as bubble up
+    let event = new MIDIEvent(eventType, {...detail, controller: mk2});
+    document.activeElement.dispatchEvent(event);
+}
+
 class APCMiniMk2 {
     constructor() {
         this.connected = false;
@@ -40,7 +52,6 @@ class APCMiniMk2 {
         this._initDone = false;
         this._sysexEnabled = false;
 
-        this._listeners = [];
         this._paintLoop = false;
 
         // wrap toggles so that when the value is set, we send the signal to the MIDI light
@@ -107,7 +118,7 @@ class APCMiniMk2 {
                             this[`fader${idx}`]._val = faderVal;
                         });
                     } else {
-                        this._dispatchEvent("sysex", evt);
+                        _dispatchEvent(this, "sysex", evt);
                     }
                     return;
                 }
@@ -118,10 +129,11 @@ class APCMiniMk2 {
                     // normalize the value and round to the 6th digit as that's far enough
                     let prev = this._states[button.key];
                     this[button.key]._val = evt.value;
-                    this._dispatchEvent("cc", {...evt, ...button, prevVal: prev});
+                    _dispatchEvent(this, "cc", {...evt, button, prevVal: prev});
                 } else {
                     // button press
-                    this._dispatchEvent(evt.type, {...evt, ...button});
+                    button._pressed = evt.type == "noteon";
+                    _dispatchEvent(this, evt.type, {...evt, button});
                 }
             },
             onStateChange: event => {
@@ -131,7 +143,7 @@ class APCMiniMk2 {
         await this.control.connect();
 
         // link all the buttons
-        let propertyNames = {rgb: "color", toggle: "on", fader: "value"};
+        let propertyNames = {rgb: "color", toggle: "toggled", fader: "value"};
         this.allControls.forEach(control => {
             if (propertyNames[control.type]) {
                 Object.defineProperty(control, propertyNames[control.type], {
@@ -287,31 +299,6 @@ class APCMiniMk2 {
             // buffer yourself
             this.control.sendSysex(0x24, ...message);
         }
-    }
-
-    addEventListener(eventType, listener) {
-        this._listeners.push([eventType, listener]);
-    }
-
-    removeEventListener(eventType, listener) {
-        let idx = -1;
-        this._listeners.forEach(([lType, lFunc], idx) => {
-            if (lType == eventType && lFunc == listener) {
-                idx = idx;
-            }
-        });
-        if (idx != -1) {
-            this._listeners.splice(idx, 1);
-        }
-    }
-
-    _dispatchEvent(eventType, data) {
-        /* emits a custom event with cc data */
-        this._listeners.forEach(([listenerType, listener]) => {
-            if (listenerType == eventType) {
-                listener({...data, type: eventType});
-            }
-        });
     }
 
     async disconnect() {
