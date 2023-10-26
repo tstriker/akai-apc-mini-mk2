@@ -4,7 +4,19 @@ import colors from "./colors.js";
 // a mere proxy - to the 128 colors spelled out in the basic mode
 export const Colors = colors;
 
+function isRGB(val) {
+    // we will brain it up later
+    return typeof val == "string" && val.length == 7;
+}
+
 let colorHex = (color, idx) => parseInt(color.slice(idx, idx + 2), 16);
+function toRGB(color) {
+    return [colorHex(color, 1), colorHex(color, 3), colorHex(color, 5)];
+}
+
+function toHex(...components) {
+    return "#" + components.map(comp => comp.toString(16).padStart(2, "0")).join("");
+}
 
 class Knob {
     write = true;
@@ -17,6 +29,9 @@ class Knob {
         this._val = null;
         this._changed = false;
         this._pressed = false;
+
+        this._pulse = null;
+        this._animating = false;
     }
 
     get pressed() {
@@ -31,10 +46,22 @@ class Fader extends Knob {
 
 class Button extends Knob {
     type = "toggle";
+
+    blink(speed = 1, pattern, delay = 0) {
+        this._animate = {mode: "blink", speed, pattern, delay};
+    }
 }
 
 class Pad extends Knob {
     type = "rgb";
+
+    pulse(speed = 1, pattern, delay = 0) {
+        this._animate = {mode: "pulse", speed, pattern, delay};
+    }
+
+    blink(speed = 1, pattern, delay = 0) {
+        this._animate = {mode: "blink", speed, pattern, delay};
+    }
 }
 
 function _dispatchEvent(mk2, eventType, detail) {
@@ -181,11 +208,11 @@ class APCMiniMk2 {
         if (control.type == "toggle") {
             // toggles are simple enough
             this.control.noteOn(control.note, val ? 127 : 0);
-        } else if (control.type == "rgb" && typeof val == "string" && val.length == 7) {
+        } else if (control.type == "rgb" && isRGB(val)) {
             if (this._paintLoop) {
                 control._changed = true;
             } else {
-                let [r, g, b] = [colorHex(val, 1), colorHex(val, 3), colorHex(val, 5)];
+                let [r, g, b] = toRGB(val);
                 this.control.sendSysex(0x24, control.note, control.note, ...toMLSB(r), ...toMLSB(g), ...toMLSB(b));
             }
         } else {
@@ -193,7 +220,7 @@ class APCMiniMk2 {
             if (Array.isArray(val)) {
                 [color, brightness] = val;
             }
-            this.control.noteOn(this.note, color, brightness);
+            this.control.noteOn(control.note, color, brightness);
         }
     }
 
@@ -205,10 +232,36 @@ class APCMiniMk2 {
             let curColor = null;
             let from = null;
             let to = null;
+            let maxMillis = 1160; // tweaked this to be same pace as akai is naturally doing on blink
+            let now = Date.now();
+            let frame = (Date.now() % maxMillis) / maxMillis;
 
             for (let i = 0; i < 64; i++) {
                 let button = this.buttons[i];
                 let color = button._val;
+
+                if (!isRGB(color)) {
+                    // we ignore buttons that have non-rgb colors
+                    color = null;
+                }
+
+                let animate = button._animate;
+                if (isRGB(color) && animate) {
+                    let buttonFrame = ((Date.now() + animate.delay) % maxMillis) / maxMillis;
+                    if (animate.speed != 1) {
+                        let fraction = 1 / animate.speed;
+                        buttonFrame = (frame % fraction) / fraction;
+                    }
+
+                    if (animate.mode == "pulse") {
+                        buttonFrame = Math.abs(0.1 + Math.sin(buttonFrame * Math.PI) * 0.9);
+                    } else if (animate.mode == "blink") {
+                        buttonFrame = buttonFrame < 0.5 ? 0 : 1;
+                    }
+
+                    let [r, g, b] = toRGB(color).map(component => Math.round(component * buttonFrame));
+                    color = toHex(r, g, b);
+                }
 
                 if (color === curColor) {
                     // if we are same as the previous, we are happy to keep going
@@ -216,15 +269,15 @@ class APCMiniMk2 {
                 } else if (curColor) {
                     // reset
                     fills.push([from, to, curColor]);
-                    if (button._changed) {
+                    if (button._changed || animate) {
                         curColor = color;
                         from = i;
                         to = i;
                     } else {
                         curColor = null;
                     }
-                } else if (button._changed) {
-                    curColor = button._val;
+                } else if (button._changed || animate) {
+                    curColor = color;
                     from = i;
                     to = i;
                 }
@@ -233,6 +286,7 @@ class APCMiniMk2 {
                     button._changed = false;
                 }
             }
+
             if (curColor) {
                 fills.push([from, to, curColor]);
             }
@@ -281,7 +335,7 @@ class APCMiniMk2 {
         for (let batch = 0; batch < padColors.length; batch += batchSize) {
             let message = [];
             padColors.slice(batch, batch + batchSize).forEach(([padFrom, padTo, color]) => {
-                let [r, g, b] = [colorHex(color, 1), colorHex(color, 3), colorHex(color, 5)];
+                let [r, g, b] = toRGB(color);
                 message.push(padFrom, padTo, ...toMLSB(r), ...toMLSB(g), ...toMLSB(b));
 
                 for (let j = padFrom; j <= padTo; j++) {
