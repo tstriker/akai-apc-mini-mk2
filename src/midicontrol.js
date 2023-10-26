@@ -8,6 +8,17 @@ export function toMLSB(val) {
     return [msb, lsb];
 }
 
+export class MIDIEvent extends Event {
+    constructor(eventType, details) {
+        super(eventType, {bubbles: true, cancelable: true});
+        Object.entries(details).forEach(([key, val]) => {
+            if (key != "type") {
+                this[key] = val;
+            }
+        });
+    }
+}
+
 export class MIDIControl {
     messages = {
         0x80: "noteOff", // 128
