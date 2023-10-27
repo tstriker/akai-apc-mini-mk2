@@ -27,11 +27,6 @@ class Knob {
         this.x = x;
         this.y = y;
         this._val = null;
-        this._changed = false;
-        this._pressed = false;
-
-        this._pulse = null;
-        this._animating = false;
     }
 
     get pressed() {
@@ -44,16 +39,26 @@ class Fader extends Knob {
     write = false;
 }
 
-class Button extends Knob {
+class Toggle extends Knob {
     type = "toggle";
+
+    constructor(note, key, x, y) {
+        super(note, key, x, y);
+        this._changed = false;
+        this._pressed = false;
+        this._animate = null;
+    }
 
     blink(speed = 1, pattern, delay = 0) {
         this._animate = {mode: "blink", speed, pattern, delay};
     }
 }
 
-class Pad extends Knob {
+class Pad extends Toggle {
     type = "rgb";
+    constructor(note, key, x, y) {
+        super(note, key, x, y);
+    }
 
     pulse(speed = 1, pattern, delay = 0) {
         this._animate = {mode: "pulse", speed, pattern, delay};
@@ -81,9 +86,6 @@ class APCMiniMk2 {
 
         this._paintLoop = false;
 
-        // wrap toggles so that when the value is set, we send the signal to the MIDI light
-        this._states = {};
-
         // buttons by note
         this.buttons = {};
         for (let i = 0; i < 64; i++) {
@@ -95,14 +97,14 @@ class APCMiniMk2 {
         // horiz simple buttons
         ["volume", "pan", "send", "device", "up", "down", "left", "right"].forEach((key, idx) => {
             let note = 100 + idx;
-            this.buttons[note] = new Button(note, `${key}Button`, idx, 9);
+            this.buttons[note] = new Toggle(note, `${key}Button`, idx, 9);
         });
         // vert simple buttons
         ["clipStop", "solo", "mute", "recArm", "select", "drum", "note", "stopAllClips"].forEach((key, idx) => {
             let note = 112 + idx;
-            this.buttons[note] = new Button(note, `${key}Button`, 9, idx);
+            this.buttons[note] = new Toggle(note, `${key}Button`, 9, idx);
         });
-        this.buttons[122] = new Button(122, "shiftButton", 9, 9);
+        this.buttons[122] = new Toggle(122, "shiftButton", 9, 9);
 
         // faders by note
         this.faders = Object.fromEntries(
@@ -153,10 +155,9 @@ class APCMiniMk2 {
                 let button = evt.type == "cc" ? this.faders[evt.note] : this.buttons[evt.note];
 
                 if (evt.type == "cc") {
-                    // normalize the value and round to the 6th digit as that's far enough
-                    let prev = this._states[button.key];
+                    let prev = this[button.key]._val;
                     this[button.key]._val = evt.value;
-                    _dispatchEvent(this, "cc", {...evt, button, prevVal: prev});
+                    _dispatchEvent(this, "cc", {...evt, button, prevVal: prev, delta: prev - evt.value});
                 } else {
                     // button press
                     button._pressed = evt.type == "noteon";
@@ -233,7 +234,6 @@ class APCMiniMk2 {
             let from = null;
             let to = null;
             let maxMillis = 1160; // tweaked this to be same pace as akai is naturally doing on blink
-            let now = Date.now();
             let frame = (Date.now() % maxMillis) / maxMillis;
 
             for (let i = 0; i < 64; i++) {
@@ -293,7 +293,8 @@ class APCMiniMk2 {
 
             if (fills.length) {
                 //console.log(fills.length, "fill instructions", fills);
-                this.fill(fills);
+                // in animate loop we do not force the new color as animations deal with everything but the color
+                this.fill(fills, false);
             }
 
             if (this._paintLoop) {
@@ -322,7 +323,7 @@ class APCMiniMk2 {
         });
     }
 
-    fill(padColors) {
+    fill(padColors, updateState = true) {
         // fill
 
         if (!this._sysexEnabled) {
@@ -338,13 +339,15 @@ class APCMiniMk2 {
                 let [r, g, b] = toRGB(color);
                 message.push(padFrom, padTo, ...toMLSB(r), ...toMLSB(g), ...toMLSB(b));
 
-                for (let j = padFrom; j <= padTo; j++) {
-                    if (Array.isArray(this._states[j]) && this._states[j][1] > 6) {
-                        // if the previous state has a blinker have to reset it back to zero
-                        // or else the sysex message won't take effect
-                        this[j] = 0;
+                if (updateState) {
+                    for (let j = padFrom; j <= padTo; j++) {
+                        if (Array.isArray(this.buttons[j]._val) && this.buttons[j]._val[1] > 6) {
+                            // if the previous state has a blinker have to reset it back to zero
+                            // or else the sysex message won't take effect
+                            this.buttons[j].color = 0;
+                        }
+                        this.buttons[j].color = color;
                     }
-                    this._states[j] = color;
                 }
             });
             // if you blast the sysex with lotsa messages all at once it will start dropping frames
