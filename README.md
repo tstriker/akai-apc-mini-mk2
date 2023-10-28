@@ -5,7 +5,7 @@ In essence:
 
 1. Get your hands on an AKAI APC Mini Mk2
 2. Plug it in your device through USB (works on smartphones too!)
-3. Open up a web browser running your website with the library's code (note: chromium on linux currently broken)
+3. Open up a web browser running your website with the library's code (note: chromium on linux currently broken - use firefox instead)
 4. Profit!
 
 # Install
@@ -15,57 +15,55 @@ In essence:
 # Initialization
 
 ```javascript
-import APCMiniMk2 from "akai-apc-mini-mk2";
-
 let mk2 = new APCMiniMk2();
 mk2.connect({sysex: true}).then(() => {
     // run some commands right on startup (e.g. turning on the LEDs)
     console.log("Midi connected!");
 
-    // light up the pad at cordinates [3,3].
-    mk2.pad33 = "#ff00ff";
+    // set pad at cordinates [3,3] to blueish (you can use hex)
+    mk2.pad33.color = "#123456";
+
+    // set pad at coordinates [1,1] to white and pulse
+    mk2.pad11.color = "#ff0000";
+    mk2.pad11.pulse();
+
+    // set button color and blink rates using AKAI's values
+    mk2.buttons[7].color = [3, 15];
 
     // light up the volume button
-    mk2.volume = 1;
+    mk2.volumeButton.toggled = true;
 
-    // and you can access fader values via `.fader[0-8]`
-    console.log("Current value of the lef-most fader:", mk2.fader0);
+    // access fader values via `.fader[0-8]`
+    console.log("Current value of the lef-most fader:", mk2.fader0.value);
 });
 
-midi.addEventListener("cc", data => {
-    console.log("CC fader changed", data);
+// the events will be broadcast globally, bubbling from the currently focused element - just like
+// they
+document.addEventListener("cc", evt => {
+    console.log(evt.key, "changed to", evt.value, evt);
 });
 
-midi.addEventListener("noteon", data => {
-    console.log("Button press", data);
+document.addEventListener("noteon", evt => {
+    console.log("Button press", evt);
 });
 
-midi.addEventListener("noteoff", data => {
-    console.log("Button release", data);
+document.addEventListener("noteoff", evt => {
+    console.log("Button release", evt);
 });
 ```
 
 # Cleanup
 
-Call `midi.destroy()` in your cleanup routines - it will remove all system-level event listeners as well
-as any listeners you might have attached.
-This is especially useful if you are using hot-reload in your project, as otherwise the event listeners will
-just keep piling up.
-
-# Reading dial/slider states and toggling the LEDs
-
-Note: There doesn't seem to be any way to find out the initial state of the knobs when you connect to it.
-
-With the caveat above in mind, to get the dial state, simply go `midi.c1` and so on.
-
-All the buttons, with the exception of "Send All" and "Solo" have an LED that you can turn on.
-Simply set the value to true/false accordingly to the button: `midi.bank_left = true`.
+Call `.disconnect()` in your cleanup routines - it will remove all system-level event listeners as well
+as any listeners you might have attached. Also, don't forget to call `document.removeEventListener` on any
+MIDI events
 
 # Events
 
-Use midi instance's `addEventListener(eventType, callback)` and `removeEventListener(eventType, callback)` to
+Use document's `addEventListener(eventType, callback)` and `removeEventListener(eventType, callback)` to
 subscribe to the events. Events:
 
--   `cc` - fired on slider/dial turn. The event data is `{code, keyCode, val, prevVal}`
--   `noteon` / `noteoff` - fired when any of the buttons are pressed and released.
--   `sysex` - when the device sends a sysex message, you can trigger one by pressing Shift+Drum on the APC Mk2.
+-   `cc` - fired on slider/dial turn. Extra data in the event: `{note, key, val, prevVal, button}`
+-   `noteon` / `noteoff` - fired when any of the buttons are pressed and released. Extra data in the event: `{note, key, button}`
+-   `sysex` - when the device sends a sysex message. Generally won't be useful to you, but you can trigger a sysex message
+    by pressing Shift+Drum on the APC Mk2.
