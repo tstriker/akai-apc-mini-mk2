@@ -162,11 +162,17 @@ class APCMiniMk2 {
                 if (evt.type == "cc") {
                     let prev = this[button.key]._val;
                     this[button.key]._val = evt.value;
-                    _dispatchEvent(this, "cc", {...evt, button, prevVal: prev, delta: prev - evt.value});
+                    _dispatchEvent(this, "cc", {
+                        ...evt,
+                        button,
+                        key: button.key,
+                        prevVal: prev,
+                        delta: prev - evt.value,
+                    });
                 } else {
                     // button press
                     button._pressed = evt.type == "noteon";
-                    _dispatchEvent(this, evt.type, {...evt, button});
+                    _dispatchEvent(this, evt.type, {...evt, button, key: button.key});
                 }
             },
             onStateChange: event => {
@@ -201,6 +207,14 @@ class APCMiniMk2 {
         }
     }
 
+    _checkHWBlink(control) {
+        if (Array.isArray(control._val) && control._val[1] > 6) {
+            // if the previous state has a blinker have to reset it back to zero
+            // or else the sysex message won't take effect
+            this.control.noteOn(control.note, 0);
+        }
+    }
+
     _getValue(control) {
         return control._val;
     }
@@ -209,12 +223,12 @@ class APCMiniMk2 {
         if (!control.write || JSON.stringify(val) == JSON.stringify(control._val)) {
             return;
         }
-        control._val = val;
 
         if (control.type == "toggle") {
             // toggles are simple enough
             this.control.noteOn(control.note, val ? 127 : 0);
         } else if (control.type == "rgb" && isRGB(val)) {
+            this._checkHWBlink(control);
             if (this._paintLoop) {
                 control._changed = true;
             } else {
@@ -228,6 +242,8 @@ class APCMiniMk2 {
             }
             this.control.noteOn(control.note, color, brightness);
         }
+
+        control._val = val;
     }
 
     startPaintLoop() {
@@ -346,11 +362,7 @@ class APCMiniMk2 {
 
                 if (updateState) {
                     for (let j = padFrom; j <= padTo; j++) {
-                        if (Array.isArray(this.buttons[j]._val) && this.buttons[j]._val[1] > 6) {
-                            // if the previous state has a blinker have to reset it back to zero
-                            // or else the sysex message won't take effect
-                            this.buttons[j].color = 0;
-                        }
+                        this._checkHWBlink(this.buttons[j]);
                         this.buttons[j].color = color;
                     }
                 }
