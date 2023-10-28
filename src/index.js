@@ -126,9 +126,14 @@ class APCMiniMk2 {
             reset: true,
             // if paintLoop is set to true, we will start a lazy ~60fps loop that continuously sends colors to midi
             // this is preferable when you are painting with rgb colors as sending colors in batch is way more effective
-            paintLoop: false,
+            paintLoop: true,
         }
     ) {
+        // true by default
+        ["reset", "paintLoop"].forEach(trueByDefault => {
+            options[trueByDefault] = options[trueByDefault] === undefined ? true : options[trueByDefault];
+        });
+
         this._sysexEnabled = options.sysex;
         this._paintLoop = options.paintLoop;
 
@@ -187,7 +192,7 @@ class APCMiniMk2 {
             this.control.sendSysex(0x60, [0x41, 0x09, 0x01, 0x04]);
         }
 
-        if (options.reset !== false) {
+        if (options.reset) {
             this.reset();
         }
 
