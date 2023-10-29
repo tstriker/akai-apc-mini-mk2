@@ -4,7 +4,7 @@ import colors from "./colors.js";
 // a mere proxy - to the 128 colors spelled out in the basic mode
 export const Colors = colors;
 
-function isRGB(val) {
+export function isRGB(val) {
     // we will brain it up later
     return typeof val == "string" && val.length == 7;
 }
@@ -42,11 +42,12 @@ class Fader extends Knob {
 class Toggle extends Knob {
     type = "toggle";
 
-    constructor(note, key, x, y) {
+    constructor(note, key, x, y, label) {
         super(note, key, x, y);
         this._changed = false;
         this._pressed = false;
         this._animate = null;
+        this.label = label;
     }
 
     blink(speed = 1, pattern, delay = 0) {
@@ -76,7 +77,11 @@ function _dispatchEvent(mk2, eventType, detail) {
     document.activeElement.dispatchEvent(event);
 }
 
-class APCMiniMk2 {
+function toWords(camelCase) {
+    return camelCase.replace(/[A-Z]/g, letter => ` ${letter.toLowerCase()}`);
+}
+
+export class APCMiniMk2 {
     constructor() {
         this.connected = false;
         this.control = null;
@@ -85,32 +90,38 @@ class APCMiniMk2 {
         this._sysexEnabled = false;
 
         this._paintLoop = false;
+        this._paintCallback = null;
 
-        // buttons by note
-        this.buttons = {};
+        this.pads = [];
         for (let i = 0; i < 64; i++) {
             let x = i % 8;
             let y = 7 - (i - x) / 8;
-            this.buttons[i] = new Pad(i, `pad${x}${y}`, x, y);
+            this.pads.push(new Pad(i, `pad${x}${y}`, x, y));
         }
 
-        // horiz simple buttons
-        ["volume", "pan", "send", "device", "up", "down", "left", "right"].forEach((key, idx) => {
-            let note = 100 + idx;
-            this.buttons[note] = new Toggle(note, `${key}Button`, idx, 9);
-        });
         // vert simple buttons
-        ["clipStop", "solo", "mute", "recArm", "select", "drum", "note", "stopAllClips"].forEach((key, idx) => {
-            let note = 112 + idx;
-            this.buttons[note] = new Toggle(note, `${key}Button`, 9, idx);
+        this.vertButtons = ["clipStop", "solo", "mute", "recArm", "select", "drum", "note", "stopAllClips"].map(
+            (key, idx) => {
+                return new Toggle(112 + idx, `${key}Button`, 9, idx, toWords(key));
+            }
+        );
+
+        // horiz simple buttons
+        this.horizButtons = ["volume", "pan", "send", "device", "up", "down", "left", "right"].map((key, idx) => {
+            return new Toggle(100 + idx, `${key}Button`, idx, 9, toWords(key));
         });
-        this.buttons[122] = new Toggle(122, "shiftButton", 9, 9);
+        this.horizButtons.push(new Toggle(122, "shiftButton", 9, 9, "shift"));
 
         // faders by note
         this.faders = Object.fromEntries(
-            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(idx => {
+            [0, 1, 2, 3, 4, 5, 6, 7, 8].map(idx => {
                 return [48 + idx, new Fader(48 + idx, `fader${idx}`)];
             })
+        );
+
+        // all buttons by note for easy access
+        this.buttons = Object.fromEntries(
+            [...this.pads, ...this.horizButtons, ...this.vertButtons].map(button => [button.note, button])
         );
 
         this.allControls = [...Object.values(this.buttons), ...Object.values(this.faders)];
@@ -127,6 +138,8 @@ class APCMiniMk2 {
             // if paintLoop is set to true, we will start a lazy ~60fps loop that continuously sends colors to midi
             // this is preferable when you are painting with rgb colors as sending colors in batch is way more effective
             paintLoop: true,
+
+            onPaint: null, // when provided will call on each paint cycle
         }
     ) {
         // true by default
@@ -136,6 +149,7 @@ class APCMiniMk2 {
 
         this._sysexEnabled = options.sysex;
         this._paintLoop = options.paintLoop;
+        this._paintCallback = options.beforePaint;
 
         this.control = new MIDIControl({
             sysex: this._sysexEnabled,
@@ -244,6 +258,8 @@ class APCMiniMk2 {
         }
 
         control._val = val;
+
+        _dispatchEvent(this, "akai-apc-mini-mk2-stateupdate", {note: control.note, value: val});
     }
 
     startPaintLoop() {
@@ -256,6 +272,10 @@ class APCMiniMk2 {
             let to = null;
             let maxMillis = 1160; // tweaked this to be same pace as akai is naturally doing on blink
             let frame = (Date.now() % maxMillis) / maxMillis;
+
+            if (this._paintCallback) {
+                this._paintCallback();
+            }
 
             for (let i = 0; i < 64; i++) {
                 let button = this.buttons[i];
