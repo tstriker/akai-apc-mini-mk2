@@ -1,6 +1,9 @@
 import {MIDIControl, MIDIEvent, toMLSB} from "./midicontrol.js";
 import colors from "./colors.js";
 
+export {State} from "./state.js";
+export * as graphics from "./graphics.js";
+
 // a mere proxy - to the 128 colors spelled out in the basic mode
 export const Colors = colors;
 
@@ -28,10 +31,6 @@ class Knob {
         this.y = y;
         this._val = null;
     }
-
-    get pressed() {
-        return this.pressed;
-    }
 }
 
 class Fader extends Knob {
@@ -41,6 +40,10 @@ class Fader extends Knob {
 
 class Toggle extends Knob {
     type = "toggle";
+
+    get pressed() {
+        return this._pressed;
+    }
 
     constructor(note, key, x, y, label) {
         super(note, key, x, y);
@@ -92,11 +95,11 @@ export class APCMiniMk2 {
         this._paintLoop = false;
         this._paintCallback = null;
 
-        this.pads = [];
+        this._pads = [];
         for (let i = 0; i < 64; i++) {
             let x = i % 8;
             let y = 7 - (i - x) / 8;
-            this.pads.push(new Pad(i, `pad${x}${y}`, x, y));
+            this._pads.push(new Pad(i, `pad${x}${y}`, x, y));
         }
 
         // vert simple buttons
@@ -121,7 +124,7 @@ export class APCMiniMk2 {
 
         // all buttons by note for easy access
         this.buttons = Object.fromEntries(
-            [...this.pads, ...this.horizButtons, ...this.vertButtons].map(button => [button.note, button])
+            [...this._pads, ...this.horizButtons, ...this.vertButtons].map(button => [button.note, button])
         );
 
         this.allControls = [...Object.values(this.buttons), ...Object.values(this.faders)];
@@ -182,11 +185,21 @@ export class APCMiniMk2 {
                         key: button.key,
                         prevVal: prev,
                         delta: prev - evt.value,
+                        shiftKey: this.shiftButton.pressed,
                     });
                 } else {
                     // button press
                     button._pressed = evt.type == "noteon";
-                    _dispatchEvent(this, evt.type, {...evt, button, key: button.key});
+                    _dispatchEvent(this, evt.type, {
+                        ...evt,
+                        button,
+                        key: button.key,
+                        shiftKey: this.shiftButton.pressed,
+                    });
+
+                    if (evt.type == "noteon" && (this.currentState?.handlers || {})[button.key]) {
+                        this.currentState.handlers[button.key](evt);
+                    }
                 }
             },
             onStateChange: event => {
@@ -262,6 +275,14 @@ export class APCMiniMk2 {
         _dispatchEvent(this, "akai-apc-mini-mk2-stateupdate", {note: control.note, value: val});
     }
 
+    pads(x, y) {
+        // allows accessing pads via `.pads(x, y)` instead of having to interpolate strings
+        if (x < 0 || x > 7 || y < 0 || y > 7) {
+            throw new Error(`Coordinates out of bounds: (${x}, ${y})`);
+        }
+        return this[`pad${x}${y}`];
+    }
+
     startPaintLoop() {
         let x = 0;
         let inner = () => {
@@ -275,6 +296,12 @@ export class APCMiniMk2 {
 
             if (this._paintCallback) {
                 this._paintCallback();
+            }
+
+            if (this.currentState) {
+                for (let pixel of this.currentState.render()) {
+                    this.pads(pixel.x, pixel.y).color = pixel.color;
+                }
             }
 
             for (let i = 0; i < 64; i++) {
@@ -393,6 +420,10 @@ export class APCMiniMk2 {
             // buffer yourself
             this.control.sendSysex(0x24, ...message);
         }
+    }
+
+    setState(state) {
+        this.currentState = state;
     }
 
     async disconnect() {
