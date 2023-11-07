@@ -175,14 +175,22 @@ export class APCMiniMk2 {
                 }
 
                 let button = evt.type == "cc" ? this.faders[evt.note] : this.buttons[evt.note];
+                // remove the `button` suffix from the events. if you wanna full name, you can check button.key
+                let key = button.key.replace("Button", "");
+
+                let evtDetails = {
+                    ...evt,
+                    mk2: this,
+                    button,
+                    key,
+                    shiftKey: this.shiftButton.pressed,
+                };
 
                 if (evt.type == "cc") {
                     let prev = this[button.key]._val;
                     this[button.key]._val = evt.value;
                     _dispatchEvent(this, "cc", {
-                        ...evt,
-                        button,
-                        key: button.key,
+                        ...evtDetails,
                         prevVal: prev,
                         delta: prev - evt.value,
                         shiftKey: this.shiftButton.pressed,
@@ -190,15 +198,17 @@ export class APCMiniMk2 {
                 } else {
                     // button press
                     button._pressed = evt.type == "noteon";
-                    _dispatchEvent(this, evt.type, {
-                        ...evt,
-                        button,
-                        key: button.key,
-                        shiftKey: this.shiftButton.pressed,
-                    });
+                    _dispatchEvent(this, evt.type, evtDetails);
+                }
 
-                    if (evt.type == "noteon" && (this.currentState?.handlers || {})[button.key]) {
-                        this.currentState.handlers[button.key](evt);
+                if (this.currentState?.handlers) {
+                    let noop = () => {};
+
+                    (this.currentState.handlers[evt.type] || noop)(evtDetails);
+                    if (evt.type == "noteon") {
+                        let keyHandler = this.currentState.handlers[key];
+                        let callback = typeof keyHandler == "function" ? keyHandler : keyHandler?.noteon;
+                        (callback || keyHandler || noop)(evtDetails);
                     }
                 }
             },
@@ -300,8 +310,19 @@ export class APCMiniMk2 {
 
             if (this.currentState) {
                 for (let pixel of this.currentState.render()) {
-                    this.pads(pixel.x, pixel.y).color = pixel.color;
+                    if (pixel.idx !== undefined) {
+                        this.buttons[pixel.idx].color = pixel.color;
+                    } else {
+                        this.pads(pixel.x, pixel.y).color = pixel.color;
+                    }
                 }
+                Object.entries(this.currentState.handlers || {}).forEach(([key, handler]) => {
+                 console.log("ffff", `${key}Button`);
+                    if (handler.toggled !== undefined) {
+                        //console.log("ffff", `${key}Button`, handler.toggled);
+                        this[`${key}Button`].toggled = handler.toggled;
+                    }
+                });
             }
 
             for (let i = 0; i < 64; i++) {

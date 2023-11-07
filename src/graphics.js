@@ -35,6 +35,25 @@ export class Sprite {
     }
 }
 
+export class PixelBoard extends Sprite {
+    constructor(x = 0, y = 0) {
+        super(x, y);
+        this.pixels = Object.fromEntries(fillRect(0, 0, 8, 8, 0).map(p => [`${p.x},${p.y}`, p]));
+    }
+
+    getPixels() {
+        return Object.values(this.pixels);
+    }
+
+    color(x, y) {
+        return this.pixels[`${x},${y}`]?.color;
+    }
+
+    fill(x, y, color) {
+        this.pixels[`${x},${y}`] = {x, y, color};
+    }
+}
+
 export function fillRect(x, y, w, h, color) {
     let pixels = [];
     for (let currentY = y; currentY < y + h; currentY++) {

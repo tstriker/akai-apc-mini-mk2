@@ -1,8 +1,6 @@
 export class State {
-    constructor() {}
-
     handlers = {};
-
+    constructor() {}
     render() {
         // callee expects a list of {x, y, color}
         return [];
