@@ -317,9 +317,7 @@ export class APCMiniMk2 {
                     }
                 }
                 Object.entries(this.currentState.handlers || {}).forEach(([key, handler]) => {
-                 console.log("ffff", `${key}Button`);
                     if (handler.toggled !== undefined) {
-                        //console.log("ffff", `${key}Button`, handler.toggled);
                         this[`${key}Button`].toggled = handler.toggled;
                     }
                 });
