@@ -14,25 +14,66 @@ export class Sprite {
     }
 
     getAllPixels() {
-        let pixelBoard = {};
-        let key = (x, y) => `${Math.round(x)},${Math.round(y)}`;
-        for (let pixel of this.getPixels()) {
-            pixelBoard[key(pixel.x, pixel.y)] = pixel;
-        }
+        let board = Board2D();
+
+        board.pixels = this.getPixels();
 
         for (let sprite of this.sprites) {
             sprite.getAllPixels().forEach(pixel => {
                 let [x, y] = [sprite.x + pixel.x, sprite.y + pixel.y];
-                pixelBoard[key(x, y)] = {x, y, color: pixel.color};
+                board(x, y).color = pixel.color;
             });
         }
-        return Object.values(pixelBoard);
+        return board.pixels();
     }
 
     get bounds() {
         let pixels = this.getAllPixels();
         return {x: Math.max(...pixels.map(p => p.x)), y: Math.max(...pixels.map(p => p.y))};
     }
+}
+
+export function Board2D() {
+    ` Board2D allows for a cleaner API for accessing x and y, especially when you do it a lot.
+        let board = new Pixels2D()
+        board(1, 5).color = "orange" // set value coordinates 1,5
+        board.pixels = [{x: 2, y: 2, depth: "random"}]
+        board.pixels // output: [{x: 1, y: 5, color: "orange"}, {x: 2, y: 2, depth: "random"}]
+
+        the only thing to watch out for is direct assignment:
+        board(1, 5) = "red" // will explode
+    `;
+
+    let pixels = {};
+    let pixelKey = (x, y) => `${x},${y}`;
+    let board = (x, y) => {
+        let key = pixelKey(x, y);
+
+        pixels[key] = pixels[key] || {x, y};
+
+        return pixels[key];
+    };
+
+    Object.defineProperty(board, "pixels", {
+        get: () => Object.values(pixels),
+        set: newPixels => {
+            for (let pixel of newPixels) {
+                let key = pixelKey(pixel.x, pixel.y);
+                pixels[key] = pixel;
+            }
+        },
+    });
+    return board;
+}
+
+export function fillRect(x, y, w, h, color) {
+    let pixels = [];
+    for (let currentY = y; currentY < y + h; currentY++) {
+        for (let currentX = x; currentX < x + w; currentX++) {
+            pixels.push({x: currentX, y: currentY, color});
+        }
+    }
+    return pixels;
 }
 
 export class PixelBoard extends Sprite {
@@ -52,16 +93,6 @@ export class PixelBoard extends Sprite {
     fill(x, y, color) {
         this.pixels[`${x},${y}`] = {x, y, color};
     }
-}
-
-export function fillRect(x, y, w, h, color) {
-    let pixels = [];
-    for (let currentY = y; currentY < y + h; currentY++) {
-        for (let currentX = x; currentX < x + w; currentX++) {
-            pixels.push({x: currentX, y: currentY, color});
-        }
-    }
-    return pixels;
 }
 
 export class Scene extends Sprite {

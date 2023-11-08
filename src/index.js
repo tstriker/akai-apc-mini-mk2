@@ -27,6 +27,7 @@ class Knob {
     constructor(note, key, x, y, onSetVal) {
         this.note = note;
         this.key = key;
+        this.name = key;
         this.x = x;
         this.y = y;
         this._val = null;
@@ -45,17 +46,26 @@ class Fader extends Knob {
     type = "fader";
     write = false;
 
-    set fader(val) {
+    set value(val) {
         super._setVal(val);
     }
 
-    get fader() {
+    get value() {
         return this._val;
     }
 }
 
 class Toggle extends Knob {
     type = "toggle";
+
+    constructor(note, key, x, y, onSetVal, label) {
+        super(note, key, x, y, onSetVal);
+        this._changed = false;
+        this._pressed = false;
+        this._animate = null;
+        this.label = label;
+        this.name = `${key}Button`;
+    }
 
     get pressed() {
         return this._pressed;
@@ -69,23 +79,19 @@ class Toggle extends Knob {
         return this._val;
     }
 
-    constructor(note, key, x, y, onSetVal, label) {
-        super(note, key, x, y, onSetVal);
-        this._changed = false;
-        this._pressed = false;
-        this._animate = null;
-        this.label = label;
-    }
-
     blink(speed = 1, pattern, delay = 0) {
         this._animate = {mode: "blink", speed, pattern, delay};
     }
 }
 
-class Pad extends Toggle {
+class Pad extends Knob {
     type = "rgb";
+
     constructor(note, key, x, y, onSetVal) {
         super(note, key, x, y, onSetVal);
+        this._changed = false;
+        this._pressed = false;
+        this._animate = null;
     }
 
     set color(val) {
@@ -140,15 +146,17 @@ export class APCMiniMk2 {
         // vert simple buttons
         this.vertButtons = ["clipStop", "solo", "mute", "recArm", "select", "drum", "note", "stopAllClips"].map(
             (key, idx) => {
-                return new Toggle(112 + idx, `${key}Button`, 9, idx, this._setControlValue, toWords(key));
+                return new Toggle(112 + idx, key, 9, idx, this._setControlValue, toWords(key));
             }
         );
 
         // horiz simple buttons
-        this.horizButtons = ["volume", "pan", "send", "device", "up", "down", "left", "right"].map((key, idx) => {
-            return new Toggle(100 + idx, `${key}Button`, idx, 9, this._setControlValue, toWords(key));
-        });
-        this.horizButtons.push(new Toggle(122, "shiftButton", 9, 9, this._setControlValue, "shift"));
+        this.horizButtons = ["volume", "pan", "send", "device", "arrowUp", "arrowDown", "arrowLeft", "arrowRight"].map(
+            (key, idx) => {
+                return new Toggle(100 + idx, key, idx, 9, this._setControlValue, toWords(key));
+            }
+        );
+        this.horizButtons.push(new Toggle(122, "shift", 9, 9, this._setControlValue, "shift"));
 
         // faders by note
         this.faders = Object.fromEntries(
@@ -167,7 +175,7 @@ export class APCMiniMk2 {
 
         // add properties by key name so that we can reference buttons by simply going `mk2.pad33` etc
         this.allControls.forEach(control => {
-            this[control.key] = control;
+            this[control.name] = control;
         });
     }
 
@@ -332,18 +340,20 @@ export class APCMiniMk2 {
 
         if (this.currentState) {
             // after paint callback we overlay any current state
-            for (let pixel of this.currentState.render()) {
+            for (let pixel of this.currentState.render(this)) {
                 if (pixel.idx !== undefined) {
                     this.buttons[pixel.idx].color = pixel.color;
                 } else {
                     this.pads(pixel.x, pixel.y).color = pixel.color;
                 }
             }
-            Object.entries(this.currentState.handlers || {}).forEach(([key, handler]) => {
-                if (handler.toggled !== undefined) {
-                    this[`${key}Button`].toggled = handler.toggled;
+
+            for (let button of Object.values(this.buttons)) {
+                let handler = (this.currentState.handlers || {})[button.key] || {};
+                if (button.type == "toggle") {
+                    this[button.name].toggled = handler.toggled !== undefined ? handler.toggled : false;
                 }
-            });
+            }
         }
 
         for (let i = 0; i < 64; i++) {
