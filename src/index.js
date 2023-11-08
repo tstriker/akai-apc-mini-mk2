@@ -211,7 +211,7 @@ export class APCMiniMk2 {
                 if (evt.type == "sysex") {
                     if (evt.messageTypeId == 0x61) {
                         evt.data.forEach((faderVal, idx) => {
-                            this[`fader${idx}`]._val = faderVal;
+                            this[`fader${idx}`]._val = faderVal / 127; // normalize;
                         });
                     } else {
                         _dispatchEvent(this, "sysex", evt);
@@ -240,7 +240,7 @@ export class APCMiniMk2 {
 
                 if (evt.type == "cc") {
                     let prev = this[button.key]._val;
-                    this[button.key]._val = evt.value;
+                    this[button.key]._val = evt.value / 127; // normalize
                     _dispatchEvent(this, "cc", {
                         ...evtDetails,
                         prevVal: prev,
