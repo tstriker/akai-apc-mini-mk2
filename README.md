@@ -8,6 +8,10 @@ In essence:
 3. Open up a web browser running your website with the library's code (note: chromium on linux currently broken - use firefox instead)
 4. Profit!
 
+# WIP Disclaimer - unstable API
+
+This package is still very much work in progress, and the API is bound to change.
+
 # Install
 
 `npm install akai-apc-mini-mk2`

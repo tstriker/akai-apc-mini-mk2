@@ -1,6 +1,6 @@
 {
     "name": "akai-apc-mini-mk2",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "Web-midi wrapper for AKAI APC Mini Mk2",
     "main": "src/index.js",
     "repository": {
