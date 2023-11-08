@@ -24,18 +24,34 @@ function toHex(...components) {
 class Knob {
     write = true;
 
-    constructor(note, key, x, y) {
+    constructor(note, key, x, y, onSetVal) {
         this.note = note;
         this.key = key;
         this.x = x;
         this.y = y;
         this._val = null;
+        this._onSetVal = onSetVal;
+    }
+
+    _setVal(val) {
+        if (val != this._val) {
+            this._val = val;
+            this._onSetVal(this, val);
+        }
     }
 }
 
 class Fader extends Knob {
     type = "fader";
     write = false;
+
+    set fader(val) {
+        super._setVal(val);
+    }
+
+    get fader() {
+        return this._val;
+    }
 }
 
 class Toggle extends Knob {
@@ -45,8 +61,16 @@ class Toggle extends Knob {
         return this._pressed;
     }
 
-    constructor(note, key, x, y, label) {
-        super(note, key, x, y);
+    set toggled(val) {
+        super._setVal(val);
+    }
+
+    get toggled() {
+        return this._val;
+    }
+
+    constructor(note, key, x, y, onSetVal, label) {
+        super(note, key, x, y, onSetVal);
         this._changed = false;
         this._pressed = false;
         this._animate = null;
@@ -60,8 +84,16 @@ class Toggle extends Knob {
 
 class Pad extends Toggle {
     type = "rgb";
-    constructor(note, key, x, y) {
-        super(note, key, x, y);
+    constructor(note, key, x, y, onSetVal) {
+        super(note, key, x, y, onSetVal);
+    }
+
+    set color(val) {
+        super._setVal(val);
+    }
+
+    get color() {
+        return this._val;
     }
 
     pulse(speed = 1, pattern, delay = 0) {
@@ -96,29 +128,32 @@ export class APCMiniMk2 {
         this._paintCallback = null;
 
         this._pads = [];
+
+        this._setControlValue = this._setControlValue.bind(this);
+
         for (let i = 0; i < 64; i++) {
             let x = i % 8;
             let y = 7 - (i - x) / 8;
-            this._pads.push(new Pad(i, `pad${x}${y}`, x, y));
+            this._pads.push(new Pad(i, `pad${x}${y}`, x, y, this._setControlValue));
         }
 
         // vert simple buttons
         this.vertButtons = ["clipStop", "solo", "mute", "recArm", "select", "drum", "note", "stopAllClips"].map(
             (key, idx) => {
-                return new Toggle(112 + idx, `${key}Button`, 9, idx, toWords(key));
+                return new Toggle(112 + idx, `${key}Button`, 9, idx, this._setControlValue, toWords(key));
             }
         );
 
         // horiz simple buttons
         this.horizButtons = ["volume", "pan", "send", "device", "up", "down", "left", "right"].map((key, idx) => {
-            return new Toggle(100 + idx, `${key}Button`, idx, 9, toWords(key));
+            return new Toggle(100 + idx, `${key}Button`, idx, 9, this._setControlValue, toWords(key));
         });
-        this.horizButtons.push(new Toggle(122, "shiftButton", 9, 9, "shift"));
+        this.horizButtons.push(new Toggle(122, "shiftButton", 9, 9, this._setControlValue, "shift"));
 
         // faders by note
         this.faders = Object.fromEntries(
             [0, 1, 2, 3, 4, 5, 6, 7, 8].map(idx => {
-                return [48 + idx, new Fader(48 + idx, `fader${idx}`)];
+                return [48 + idx, new Fader(48 + idx, `fader${idx}`, this._setControlValue)];
             })
         );
 
@@ -127,9 +162,11 @@ export class APCMiniMk2 {
             [...this._pads, ...this.horizButtons, ...this.vertButtons].map(button => [button.note, button])
         );
 
+        // list of all controls for search/filter/etc
         this.allControls = [...Object.values(this.buttons), ...Object.values(this.faders)];
+
+        // add properties by key name so that we can reference buttons by simply going `mk2.pad33` etc
         this.allControls.forEach(control => {
-            // add properties by key name so that we can reference buttons by simply going `mk2.pad33` etc
             this[control.key] = control;
         });
     }
@@ -178,12 +215,19 @@ export class APCMiniMk2 {
                 // remove the `button` suffix from the events. if you wanna full name, you can check button.key
                 let key = button.key.replace("Button", "");
 
+                if (evt.type != "cc") {
+                    button._pressed = evt.type == "noteon";
+                }
+
+                let pressedKeys = Object.values(this.buttons).filter(button => button.pressed);
+
                 let evtDetails = {
                     ...evt,
                     mk2: this,
                     button,
                     key,
                     shiftKey: this.shiftButton.pressed,
+                    pressedKeys,
                 };
 
                 if (evt.type == "cc") {
@@ -197,7 +241,6 @@ export class APCMiniMk2 {
                     });
                 } else {
                     // button press
-                    button._pressed = evt.type == "noteon";
                     _dispatchEvent(this, evt.type, evtDetails);
                 }
 
@@ -218,17 +261,6 @@ export class APCMiniMk2 {
         });
         await this.control.connect();
 
-        // link all the buttons
-        let propertyNames = {rgb: "color", toggle: "toggled", fader: "value"};
-        this.allControls.forEach(control => {
-            if (propertyNames[control.type]) {
-                Object.defineProperty(control, propertyNames[control.type], {
-                    get: () => this._getValue(control),
-                    set: value => this._setValue(control, value),
-                });
-            }
-        });
-
         if (options.sysex) {
             // if we have sysex enabled, sniff out the current slider states
             // the 0x61 response will come to to onMessage, so check the code above
@@ -239,8 +271,8 @@ export class APCMiniMk2 {
             this.reset();
         }
 
-        if (options.paintLoop) {
-            this.startPaintLoop();
+        if (this._paintLoop) {
+            this.paintPads();
         }
     }
 
@@ -252,15 +284,7 @@ export class APCMiniMk2 {
         }
     }
 
-    _getValue(control) {
-        return control._val;
-    }
-
-    _setValue(control, val) {
-        if (!control.write || JSON.stringify(val) == JSON.stringify(control._val)) {
-            return;
-        }
-
+    _setControlValue(control, val) {
         if (control.type == "toggle") {
             // toggles are simple enough
             this.control.noteOn(control.note, val ? 127 : 0);
@@ -279,9 +303,6 @@ export class APCMiniMk2 {
             }
             this.control.noteOn(control.note, color, brightness);
         }
-
-        control._val = val;
-
         _dispatchEvent(this, "akai-apc-mini-mk2-stateupdate", {note: control.note, value: val});
     }
 
@@ -293,103 +314,102 @@ export class APCMiniMk2 {
         return this[`pad${x}${y}`];
     }
 
-    startPaintLoop() {
-        let x = 0;
-        let inner = () => {
-            let fills = [];
+    paintPads() {
+        if (!this._paintLoop) {
+            return;
+        }
 
-            let curColor = null;
-            let from = null;
-            let to = null;
-            let maxMillis = 1160; // tweaked this to be same pace as akai is naturally doing on blink
-            let frame = (Date.now() % maxMillis) / maxMillis;
+        let fills = [];
+        let curColor = null;
+        let from = null;
+        let to = null;
+        let maxMillis = 1160; // tweaked this to be same pace as akai is naturally doing on blink
+        let frame = (Date.now() % maxMillis) / maxMillis;
 
-            if (this._paintCallback) {
-                this._paintCallback();
+        if (this._paintCallback) {
+            this._paintCallback();
+        }
+
+        if (this.currentState) {
+            // after paint callback we overlay any current state
+            for (let pixel of this.currentState.render()) {
+                if (pixel.idx !== undefined) {
+                    this.buttons[pixel.idx].color = pixel.color;
+                } else {
+                    this.pads(pixel.x, pixel.y).color = pixel.color;
+                }
+            }
+            Object.entries(this.currentState.handlers || {}).forEach(([key, handler]) => {
+                if (handler.toggled !== undefined) {
+                    this[`${key}Button`].toggled = handler.toggled;
+                }
+            });
+        }
+
+        for (let i = 0; i < 64; i++) {
+            let button = this.buttons[i];
+            let color = button._val;
+
+            if (!isRGB(color)) {
+                // we ignore buttons that have non-rgb colors
+                color = null;
             }
 
-            if (this.currentState) {
-                for (let pixel of this.currentState.render()) {
-                    if (pixel.idx !== undefined) {
-                        this.buttons[pixel.idx].color = pixel.color;
-                    } else {
-                        this.pads(pixel.x, pixel.y).color = pixel.color;
-                    }
+            let animate = button._animate;
+            if (isRGB(color) && animate) {
+                let buttonFrame = ((Date.now() + animate.delay) % maxMillis) / maxMillis;
+                if (animate.speed != 1) {
+                    let fraction = 1 / animate.speed;
+                    buttonFrame = (frame % fraction) / fraction;
                 }
-                Object.entries(this.currentState.handlers || {}).forEach(([key, handler]) => {
-                    if (handler.toggled !== undefined) {
-                        this[`${key}Button`].toggled = handler.toggled;
-                    }
-                });
+
+                if (animate.mode == "pulse") {
+                    buttonFrame = Math.abs(0.1 + Math.sin(buttonFrame * Math.PI) * 0.9);
+                } else if (animate.mode == "blink") {
+                    buttonFrame = buttonFrame < 0.5 ? 0 : 1;
+                }
+
+                let [r, g, b] = toRGB(color).map(component => Math.round(component * buttonFrame));
+                color = toHex(r, g, b);
             }
 
-            for (let i = 0; i < 64; i++) {
-                let button = this.buttons[i];
-                let color = button._val;
-
-                if (!isRGB(color)) {
-                    // we ignore buttons that have non-rgb colors
-                    color = null;
-                }
-
-                let animate = button._animate;
-                if (isRGB(color) && animate) {
-                    let buttonFrame = ((Date.now() + animate.delay) % maxMillis) / maxMillis;
-                    if (animate.speed != 1) {
-                        let fraction = 1 / animate.speed;
-                        buttonFrame = (frame % fraction) / fraction;
-                    }
-
-                    if (animate.mode == "pulse") {
-                        buttonFrame = Math.abs(0.1 + Math.sin(buttonFrame * Math.PI) * 0.9);
-                    } else if (animate.mode == "blink") {
-                        buttonFrame = buttonFrame < 0.5 ? 0 : 1;
-                    }
-
-                    let [r, g, b] = toRGB(color).map(component => Math.round(component * buttonFrame));
-                    color = toHex(r, g, b);
-                }
-
-                if (color === curColor) {
-                    // if we are same as the previous, we are happy to keep going
-                    to = i;
-                } else if (curColor) {
-                    // reset
-                    fills.push([from, to, curColor]);
-                    if (button._changed || animate) {
-                        curColor = color;
-                        from = i;
-                        to = i;
-                    } else {
-                        curColor = null;
-                    }
-                } else if (button._changed || animate) {
+            if (color === curColor) {
+                // if we are same as the previous, we are happy to keep going
+                to = i;
+            } else if (curColor) {
+                // reset
+                fills.push([from, to, curColor]);
+                if (button._changed || animate) {
                     curColor = color;
                     from = i;
                     to = i;
+                } else {
+                    curColor = null;
                 }
-
-                if (button._changed) {
-                    button._changed = false;
-                }
+            } else if (button._changed || animate) {
+                curColor = color;
+                from = i;
+                to = i;
             }
 
-            if (curColor) {
-                fills.push([from, to, curColor]);
+            if (button._changed) {
+                button._changed = false;
             }
+        }
 
-            if (fills.length) {
-                //console.log(fills.length, "fill instructions", fills);
-                // in animate loop we do not force the new color as animations deal with everything but the color
-                this.fill(fills, false);
-            }
+        if (curColor) {
+            fills.push([from, to, curColor]);
+        }
 
-            if (this._paintLoop) {
-                //requestAnimationFrame(inner);
-                requestAnimationFrame(inner);
-            }
-        };
-        inner();
+        if (fills.length) {
+            // push a fill instruction that will do a sysex call if pad colors have changed
+            this.fill(fills, false);
+        }
+
+        if (this._paintLoop) {
+            //requestAnimationFrame(inner);
+            requestAnimationFrame(() => this.paintPads());
+        }
     }
 
     select(x1, y1, x2, y2) {
@@ -406,7 +426,7 @@ export class APCMiniMk2 {
     reset() {
         // turn all pads off
         Object.values(this.buttons).forEach(button => {
-            this._setValue(button, 0);
+            this._setControlValue(button, 0);
         });
     }
 
