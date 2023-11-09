@@ -33,7 +33,7 @@ export class Sprite {
     }
 }
 
-export function Board2D() {
+export function Board2D(initPixels = []) {
     ` Board2D allows for a cleaner API for accessing x and y, especially when you do it a lot.
         let board = new Pixels2D()
         board(1, 5).color = "orange" // set value coordinates 1,5
@@ -63,6 +63,9 @@ export function Board2D() {
             }
         },
     });
+    if (initPixels.length) {
+        board.pixels = initPixels;
+    }
     return board;
 }
 
