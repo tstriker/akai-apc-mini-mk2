@@ -7,121 +7,6 @@ export * as graphics from "./graphics.js";
 // a mere proxy - to the 128 colors spelled out in the basic mode
 export const Colors = colors;
 
-export function isRGB(val) {
-    // we will brain it up later
-    return typeof val == "string" && val.length == 7;
-}
-
-let colorHex = (color, idx) => parseInt(color.slice(idx, idx + 2), 16);
-function toRGB(color) {
-    return [colorHex(color, 1), colorHex(color, 3), colorHex(color, 5)];
-}
-
-function toHex(...components) {
-    return "#" + components.map(comp => comp.toString(16).padStart(2, "0")).join("");
-}
-
-class Knob {
-    write = true;
-
-    constructor(note, key, x, y, onSetVal) {
-        this.note = note;
-        this.key = key;
-        this.name = key;
-        this.x = x;
-        this.y = y;
-        this._val = null;
-        this._onSetVal = onSetVal;
-    }
-
-    _setVal(val) {
-        if (val != this._val) {
-            this._val = val;
-            this._onSetVal(this, val);
-        }
-    }
-}
-
-class Fader extends Knob {
-    type = "fader";
-    write = false;
-
-    set value(val) {
-        super._setVal(val);
-    }
-
-    get value() {
-        return this._val;
-    }
-}
-
-class Toggle extends Knob {
-    type = "toggle";
-
-    constructor(note, key, x, y, onSetVal, label) {
-        super(note, key, x, y, onSetVal);
-        this._changed = false;
-        this._pressed = false;
-        this._animate = null;
-        this.label = label;
-        this.name = `${key}Button`;
-    }
-
-    get pressed() {
-        return this._pressed;
-    }
-
-    set toggled(val) {
-        super._setVal(val);
-    }
-
-    get toggled() {
-        return this._val;
-    }
-
-    blink(speed = 1, pattern, delay = 0) {
-        this._animate = {mode: "blink", speed, pattern, delay};
-    }
-}
-
-class Pad extends Knob {
-    type = "rgb";
-
-    constructor(note, key, x, y, onSetVal) {
-        super(note, key, x, y, onSetVal);
-        this._changed = false;
-        this._pressed = false;
-        this._animate = null;
-    }
-
-    set color(val) {
-        super._setVal(val);
-    }
-
-    get color() {
-        return this._val;
-    }
-
-    pulse(speed = 1, pattern, delay = 0) {
-        this._animate = {mode: "pulse", speed, pattern, delay};
-    }
-
-    blink(speed = 1, pattern, delay = 0) {
-        this._animate = {mode: "blink", speed, pattern, delay};
-    }
-}
-
-function _dispatchEvent(mk2, eventType, detail) {
-    // we interpret midi controller events similar to how you would handle keyboard events - they can work on
-    // the currently focused element that can intercept the event, as well as bubble up
-    let event = new MIDIEvent(eventType, {...detail, controller: mk2});
-    document.activeElement.dispatchEvent(event);
-}
-
-function toWords(camelCase) {
-    return camelCase.replace(/[A-Z]/g, letter => ` ${letter.toLowerCase()}`);
-}
-
 export class APCMiniMk2 {
     constructor() {
         this.connected = false;
@@ -146,14 +31,14 @@ export class APCMiniMk2 {
         // vert simple buttons
         this.vertButtons = ["clipStop", "solo", "mute", "recArm", "select", "drum", "note", "stopAllClips"].map(
             (key, idx) => {
-                return new Toggle(112 + idx, key, 9, idx, this._setControlValue, toWords(key));
+                return new Toggle(112 + idx, key, 9, idx, this._setControlValue, _toWords(key));
             }
         );
 
         // horiz simple buttons
         this.horizButtons = ["volume", "pan", "send", "device", "arrowUp", "arrowDown", "arrowLeft", "arrowRight"].map(
             (key, idx) => {
-                return new Toggle(100 + idx, key, idx, 9, this._setControlValue, toWords(key));
+                return new Toggle(100 + idx, key, idx, 9, this._setControlValue, _toWords(key));
             }
         );
         this.horizButtons.push(new Toggle(122, "shift", 9, 9, this._setControlValue, "shift"));
@@ -187,7 +72,7 @@ export class APCMiniMk2 {
             // this is preferable when you are painting with rgb colors as sending colors in batch is way more effective
             paintLoop: true,
 
-            onPaint: null, // when provided will call on each paint cycle
+            beforePaint: null, // when provided will call on each paint cycle
         }
     ) {
         // true by default
@@ -211,7 +96,7 @@ export class APCMiniMk2 {
                 if (evt.type == "sysex") {
                     if (evt.messageTypeId == 0x61) {
                         evt.data.forEach((faderVal, idx) => {
-                            this[`fader${idx}`]._val = faderVal / 127; // normalize;
+                            this[`fader${idx}`]._val = faderVal / 127; // set fader's value in normalized form;
                         });
                     } else {
                         _dispatchEvent(this, "sysex", evt);
@@ -284,42 +169,35 @@ export class APCMiniMk2 {
         }
     }
 
-    _checkHWBlink(control) {
-        if (Array.isArray(control._val) && control._val[1] > 6) {
-            // if the previous state has a blinker have to reset it back to zero
-            // or else the sysex message won't take effect
-            this.control.noteOn(control.note, 0);
-        }
-    }
-
-    _setControlValue(control, val) {
-        if (control.type == "toggle") {
-            // toggles are simple enough
-            this.control.noteOn(control.note, val ? 127 : 0);
-        } else if (control.type == "rgb" && isRGB(val)) {
-            this._checkHWBlink(control);
-            if (this._paintLoop) {
-                control._changed = true;
-            } else {
-                let [r, g, b] = toRGB(val);
-                this.control.sendSysex(0x24, control.note, control.note, ...toMLSB(r), ...toMLSB(g), ...toMLSB(b));
-            }
-        } else {
-            let [color, brightness] = [val, val ? 6 : 0];
-            if (Array.isArray(val)) {
-                [color, brightness] = val;
-            }
-            this.control.noteOn(control.note, color, brightness);
-        }
-        _dispatchEvent(this, "akai-apc-mini-mk2-stateupdate", {note: control.note, value: val});
-    }
-
     pads(x, y) {
         // allows accessing pads via `.pads(x, y)` instead of having to interpolate strings
         if (x < 0 || x > 7 || y < 0 || y > 7) {
             throw new Error(`Coordinates out of bounds: (${x}, ${y})`);
         }
         return this[`pad${x}${y}`];
+    }
+
+    get pixels() {
+        /* returns an array of current states of pixels and their RGB colors. if you want the indexed colors, go
+           straight to pads instead
+        */
+        return this._pads.map((pad, idx) => {
+            let color;
+            if (!pad.color) {
+                // pass
+            } else if (isRGB(pad.color)) {
+                color = pad.color;
+            } else if (Array.isArray(pad.color)) {
+                color = Colors[pad.color[0]];
+            } else {
+                color = Colors[pad.color] || pad.color;
+            }
+
+            if (color == "#000000" || color === null) {
+                color = "#333333";
+            }
+            return {idx, x: pad.x, y: pad.y, color};
+        });
     }
 
     paintPads() {
@@ -335,7 +213,7 @@ export class APCMiniMk2 {
         let frame = (Date.now() % maxMillis) / maxMillis;
 
         if (this._paintCallback) {
-            this._paintCallback();
+            this._paintCallback(this);
         }
 
         if (this.currentState) {
@@ -482,6 +360,143 @@ export class APCMiniMk2 {
         this._listeners = [];
         this.connected = false;
     }
+
+    _checkHWBlink(control) {
+        if (Array.isArray(control._val) && control._val[1] > 6) {
+            // if the previous state has a blinker have to reset it back to zero
+            // or else the sysex message won't take effect
+            this.control.noteOn(control.note, 0);
+        }
+    }
+
+    _setControlValue(control, val) {
+        if (control.type == "toggle") {
+            // toggles are simple enough
+            this.control.noteOn(control.note, val ? 127 : 0);
+        } else if (control.type == "rgb" && isRGB(val)) {
+            this._checkHWBlink(control);
+            if (this._paintLoop) {
+                control._changed = true;
+            } else {
+                let [r, g, b] = toRGB(val);
+                this.control.sendSysex(0x24, control.note, control.note, ...toMLSB(r), ...toMLSB(g), ...toMLSB(b));
+            }
+        } else {
+            let [color, brightness] = [val, val ? 6 : 0];
+            if (Array.isArray(val)) {
+                [color, brightness] = val;
+            }
+            this.control.noteOn(control.note, color, brightness);
+        }
+    }
+}
+
+class Knob {
+    constructor(note, key, x, y, onSetVal) {
+        this.note = note;
+        this.key = key;
+        this.name = key;
+        this.x = x;
+        this.y = y;
+        this._val = null;
+        this._onSetVal = onSetVal;
+    }
+
+    _setVal(val) {
+        if (val != this._val) {
+            this._val = val;
+            this._onSetVal(this, val);
+        }
+    }
+}
+
+class Fader extends Knob {
+    type = "fader";
+
+    get value() {
+        return this._val;
+    }
+}
+
+class Toggle extends Knob {
+    type = "toggle";
+
+    constructor(note, key, x, y, onSetVal, label) {
+        super(note, key, x, y, onSetVal);
+        this._changed = false;
+        this._pressed = false;
+        this._animate = null;
+        this.label = label;
+        this.name = `${key}Button`;
+    }
+
+    get pressed() {
+        return this._pressed;
+    }
+
+    set toggled(val) {
+        this._setVal(val);
+    }
+
+    get toggled() {
+        return this._val;
+    }
+
+    blink(speed = 1, pattern, delay = 0) {
+        this._animate = {mode: "blink", speed, pattern, delay};
+    }
+}
+
+class Pad extends Knob {
+    type = "rgb";
+
+    constructor(note, key, x, y, onSetVal) {
+        super(note, key, x, y, onSetVal);
+        this._changed = false;
+        this._pressed = false;
+        this._animate = null;
+    }
+
+    set color(val) {
+        this._setVal(val);
+    }
+
+    get color() {
+        return this._val;
+    }
+
+    pulse(speed = 1, pattern, delay = 0) {
+        this._animate = {mode: "pulse", speed, pattern, delay};
+    }
+
+    blink(speed = 1, pattern, delay = 0) {
+        this._animate = {mode: "blink", speed, pattern, delay};
+    }
+}
+
+function _dispatchEvent(mk2, eventType, detail) {
+    // we interpret midi controller events similar to how you would handle keyboard events - they can work on
+    // the currently focused element that can intercept the event, as well as bubble up
+    let event = new MIDIEvent(eventType, {...detail, controller: mk2});
+    document.activeElement.dispatchEvent(event);
+}
+
+function _toWords(camelCase) {
+    return camelCase.replace(/[A-Z]/g, letter => ` ${letter.toLowerCase()}`);
+}
+
+export function isRGB(val) {
+    // we will brain it up later
+    return typeof val == "string" && val.length == 7;
+}
+
+function toHex(...components) {
+    return "#" + components.map(comp => comp.toString(16).padStart(2, "0")).join("");
+}
+
+let colorHex = (color, idx) => parseInt(color.slice(idx, idx + 2), 16);
+function toRGB(color) {
+    return [colorHex(color, 1), colorHex(color, 3), colorHex(color, 5)];
 }
 
 export default APCMiniMk2;
