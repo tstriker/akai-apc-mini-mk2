@@ -7,7 +7,11 @@ export * as graphics from "./graphics.js";
 // a mere proxy - to the 128 colors spelled out in the basic mode
 export const Colors = colors;
 
+const modelName = "akai-apc-mini-mk2";
+
 export class APCMiniMk2 {
+    model = modelName;
+
     constructor() {
         this.connected = false;
         this.control = null;
@@ -90,7 +94,7 @@ export class APCMiniMk2 {
             deviceID: 0x7f,
             modelID: 0x4f,
             deviceCheck: port => {
-                return port.name.indexOf("APC mini mk2 Contr") != -1;
+                return port.name.indexOf("APC mini mk2 Contr") != -1 || port.name.indexOf("APC mini mk2 MIDI 1") != -1;
             },
             onMessage: evt => {
                 if (evt.type == "sysex") {
@@ -139,12 +143,13 @@ export class APCMiniMk2 {
 
                 if (this.currentState?.handlers) {
                     let noop = () => {};
-
                     (this.currentState.handlers[evt.type] || noop)(evtDetails);
-                    if (evt.type == "noteon") {
-                        let keyHandler = this.currentState.handlers[key];
-                        let callback = typeof keyHandler == "function" ? keyHandler : keyHandler?.noteon;
-                        (callback || keyHandler || noop)(evtDetails);
+
+                    let keyHandler = this.currentState.handlers[key] || {};
+                    if (typeof keyHandler == "function" && evt.type == "noteon") {
+                        keyHandler(evtDetails);
+                    } else if (keyHandler[evt.type]) {
+                        keyHandler[evt.type](evtDetails);
                     }
                 }
             },
@@ -219,10 +224,12 @@ export class APCMiniMk2 {
         if (this.currentState) {
             // after paint callback we overlay any current state
             for (let pixel of this.currentState.render(this)) {
-                if (pixel.idx !== undefined) {
-                    this.buttons[pixel.idx].color = pixel.color;
-                } else {
-                    this.pads(pixel.x, pixel.y).color = pixel.color;
+                let btn = pixel.idx !== undefined ? this.buttons[pixel.idx] : this.pads(pixel.x, pixel.y);
+
+                for (let attr of ["color", "animate"]) {
+                    if (pixel[attr] !== null) {
+                        btn[attr] = pixel[attr];
+                    }
                 }
             }
 
@@ -230,6 +237,15 @@ export class APCMiniMk2 {
                 let handler = (this.currentState.handlers || {})[button.key] || {};
                 if (button.type == "toggle") {
                     this[button.name].toggled = handler.toggled !== undefined ? handler.toggled : false;
+                } else if (button.type == "rgb") {
+                    for (let attr of ["color", "animate"]) {
+                        if (handler[attr] !== undefined) {
+                            let val = typeof handler[attr] == "function" ? handler[attr]() : handler[attr];
+                            if (val !== null) {
+                                this[button.name][attr] = val;
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -243,9 +259,9 @@ export class APCMiniMk2 {
                 color = null;
             }
 
-            let animate = button._animate;
+            let animate = button.animate;
             if (isRGB(color) && animate) {
-                let buttonFrame = ((Date.now() + animate.delay) % maxMillis) / maxMillis;
+                let buttonFrame = ((Date.now() + (animate.delay || 0)) % maxMillis) / maxMillis;
                 if (animate.speed != 1) {
                     let fraction = 1 / animate.speed;
                     buttonFrame = (frame % fraction) / fraction;
@@ -442,8 +458,19 @@ class Toggle extends Knob {
         return this._val;
     }
 
+    set animate(val) {
+        if (JSON.stringify(this._animate) != JSON.stringify(val)) {
+            this._changed = true;
+            this._animate = val;
+        }
+    }
+
+    get animate() {
+        return this._animate;
+    }
+
     blink(speed = 1, pattern, delay = 0) {
-        this._animate = {mode: "blink", speed, pattern, delay};
+        this.animate = {mode: "blink", speed, pattern, delay};
     }
 }
 
@@ -465,19 +492,30 @@ class Pad extends Knob {
         return this._val;
     }
 
+    set animate(val) {
+        if (JSON.stringify(this._animate) != JSON.stringify(val)) {
+            this._changed = true;
+            this._animate = val;
+        }
+    }
+
+    get animate() {
+        return this._animate;
+    }
+
     pulse(speed = 1, pattern, delay = 0) {
-        this._animate = {mode: "pulse", speed, pattern, delay};
+        this.animate = {mode: "pulse", speed, pattern, delay};
     }
 
     blink(speed = 1, pattern, delay = 0) {
-        this._animate = {mode: "blink", speed, pattern, delay};
+        this.animate = {mode: "blink", speed, pattern, delay};
     }
 }
 
 function _dispatchEvent(mk2, eventType, detail) {
     // we interpret midi controller events similar to how you would handle keyboard events - they can work on
     // the currently focused element that can intercept the event, as well as bubble up
-    let event = new MIDIEvent(eventType, {...detail, controller: mk2});
+    let event = new MIDIEvent(eventType, {model: modelName, ...detail, controller: mk2});
     document.activeElement.dispatchEvent(event);
 }
 
