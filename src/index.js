@@ -29,7 +29,11 @@ export class APCMiniMk2 {
         for (let i = 0; i < 64; i++) {
             let x = i % 8;
             let y = 7 - (i - x) / 8;
-            this._pads.push(new Pad(i, `pad${x}${y}`, x, y, this._setControlValue));
+            // pad names are 1-based, but coordinates are kept at 0,0. So pad11 = {x: 0, y: 0}
+            // this makes more intuitive sense than it looks - as you look at the board, you think the 8th pad
+            // while when working with coords, you're like "the pad at coords [0,0]"
+            // need this long doctring, because i kept trying to access the 8th pad as pad88 and faceplanting
+            this._pads.push(new Pad(i, `pad${x + 1}${y + 1}`, x, y, this._setControlValue));
         }
 
         // vert simple buttons
@@ -60,10 +64,12 @@ export class APCMiniMk2 {
         );
 
         // list of all controls for search/filter/etc
-        this.allControls = [...Object.values(this.buttons), ...Object.values(this.faders)];
+        this.knobs = Object.fromEntries(
+            [...Object.values(this.buttons), ...Object.values(this.faders)].map(knob => [knob.key, knob])
+        );
 
         // add properties by key name so that we can reference buttons by simply going `mk2.pad33` etc
-        this.allControls.forEach(control => {
+        Object.values(this.knobs).forEach(control => {
             this[control.name] = control;
         });
     }
@@ -124,6 +130,8 @@ export class APCMiniMk2 {
                     shiftKey: this.shiftButton.pressed,
                 };
 
+                // console.log("MIDI Event:", evtDetails);
+
                 if (evt.type == "cc") {
                     let prev = this[button.key]._val;
                     this[button.key]._val = evt.value / 127; // normalize
@@ -181,7 +189,7 @@ export class APCMiniMk2 {
         if (x < 0 || x > 7 || y < 0 || y > 7) {
             throw new Error(`Coordinates out of bounds: (${x}, ${y})`);
         }
-        return this[`pad${x}${y}`];
+        return this[`pad${x + 1}${y + 1}`]; // coords are 0-based why pad names start at 1
     }
 
     get pixels() {
@@ -212,7 +220,7 @@ export class APCMiniMk2 {
         let buttons = [];
         for (let y = y1; y <= y2; y++) {
             for (let x = x1; x <= x2; x++) {
-                buttons.push(this[`pad${x}${y}`]);
+                buttons.push(this.pads(x, y));
             }
         }
         return buttons;
@@ -374,8 +382,7 @@ export class APCMiniMk2 {
         }
 
         if (this._paintLoop) {
-            //requestAnimationFrame(inner);
-            requestAnimationFrame(() => this._paintPads());
+            setTimeout(() => this._paintPads());
         }
     }
 
