@@ -107,7 +107,13 @@ export class MIDIControl {
         } else if (messageName == "sysex") {
             this._handleSysexMessage(midiMessage.data);
         } else {
-            this.options.onMessage({type: messageName.toLowerCase(), channel, note: remaining[0], value: remaining[1]});
+            this.options.onMessage({
+                type: messageName.toLowerCase(),
+                channel,
+                note: remaining[0],
+                value: remaining[1] / 127, // most of the time working in 0..1 range makes most sense
+                valueMIDI: remaining[1], // actual, non-divided value
+            });
         }
     }
 

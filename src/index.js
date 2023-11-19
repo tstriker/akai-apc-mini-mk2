@@ -116,15 +116,12 @@ export class APCMiniMk2 {
                     button._pressed = evt.type == "noteon";
                 }
 
-                let pressedKeys = Object.values(this.buttons).filter(button => button.pressed);
-
                 let evtDetails = {
                     ...evt,
                     mk2: this,
                     button,
                     key,
                     shiftKey: this.shiftButton.pressed,
-                    pressedKeys,
                 };
 
                 if (evt.type == "cc") {
@@ -170,12 +167,17 @@ export class APCMiniMk2 {
         }
 
         if (this._paintLoop) {
-            this.paintPads();
+            this._paintPads();
         }
     }
 
+    get pressedKeys() {
+        // returns all buttons that are currently in the pressed state
+        return Object.values(this.buttons).filter(button => button.pressed);
+    }
+
     pads(x, y) {
-        // allows accessing pads via `.pads(x, y)` instead of having to interpolate strings
+        // simplifies accessing pads via `.pads(x, y)` instead of having to do string interpolation
         if (x < 0 || x > 7 || y < 0 || y > 7) {
             throw new Error(`Coordinates out of bounds: (${x}, ${y})`);
         }
@@ -205,7 +207,68 @@ export class APCMiniMk2 {
         });
     }
 
-    paintPads() {
+    select(x1, y1, x2, y2) {
+        // return a list of buttons in the selected range; goes left-to-right, top-to-bottom
+        let buttons = [];
+        for (let y = y1; y <= y2; y++) {
+            for (let x = x1; x <= x2; x++) {
+                buttons.push(this[`pad${x}${y}`]);
+            }
+        }
+        return buttons;
+    }
+
+    reset() {
+        // turn all pads off
+        Object.values(this.buttons).forEach(button => {
+            this._setControlValue(button, 0);
+        });
+    }
+
+    fill(padColors, updateState = true) {
+        // fill
+
+        if (!this._sysexEnabled) {
+            throw Error(
+                "Setting RGB colors for pads works only when sysex is enabled. construct with `new APCMiniMK2({sysex: true})`"
+            );
+        }
+
+        let batchSize = 32;
+        for (let batch = 0; batch < padColors.length; batch += batchSize) {
+            let message = [];
+            padColors.slice(batch, batch + batchSize).forEach(([padFrom, padTo, color]) => {
+                let [r, g, b] = toRGB(color);
+                message.push(padFrom, padTo, ...toMLSB(r), ...toMLSB(g), ...toMLSB(b));
+
+                if (updateState) {
+                    for (let j = padFrom; j <= padTo; j++) {
+                        this._checkHWBlink(this.buttons[j]);
+                        this.buttons[j].color = color;
+                    }
+                }
+            });
+            // if you blast the sysex with lotsa messages all at once it will start dropping frames
+            // discussion here: https://github.com/WebAudio/web-midi-api/issues/158
+            // the best you can do is not blast, but if you do blast, use setInterval/setTimeout and manage the
+            // buffer yourself
+            this.control.sendSysex(0x24, ...message);
+        }
+    }
+
+    setState(state) {
+        this.currentState = state;
+    }
+
+    async disconnect() {
+        this._paintLoop = false;
+        this.reset();
+        this.control.disconnect();
+        this._listeners = [];
+        this.connected = false;
+    }
+
+    _paintPads() {
         if (!this._paintLoop) {
             return;
         }
@@ -312,69 +375,8 @@ export class APCMiniMk2 {
 
         if (this._paintLoop) {
             //requestAnimationFrame(inner);
-            requestAnimationFrame(() => this.paintPads());
+            requestAnimationFrame(() => this._paintPads());
         }
-    }
-
-    select(x1, y1, x2, y2) {
-        // return a list of buttons in the selected range; goes left-to-right, top-to-bottom
-        let buttons = [];
-        for (let y = y1; y <= y2; y++) {
-            for (let x = x1; x <= x2; x++) {
-                buttons.push(this[`pad${x}${y}`]);
-            }
-        }
-        return buttons;
-    }
-
-    reset() {
-        // turn all pads off
-        Object.values(this.buttons).forEach(button => {
-            this._setControlValue(button, 0);
-        });
-    }
-
-    fill(padColors, updateState = true) {
-        // fill
-
-        if (!this._sysexEnabled) {
-            throw Error(
-                "Setting RGB colors for pads works only when sysex is enabled. construct with `new APCMiniMK2({sysex: true})`"
-            );
-        }
-
-        let batchSize = 32;
-        for (let batch = 0; batch < padColors.length; batch += batchSize) {
-            let message = [];
-            padColors.slice(batch, batch + batchSize).forEach(([padFrom, padTo, color]) => {
-                let [r, g, b] = toRGB(color);
-                message.push(padFrom, padTo, ...toMLSB(r), ...toMLSB(g), ...toMLSB(b));
-
-                if (updateState) {
-                    for (let j = padFrom; j <= padTo; j++) {
-                        this._checkHWBlink(this.buttons[j]);
-                        this.buttons[j].color = color;
-                    }
-                }
-            });
-            // if you blast the sysex with lotsa messages all at once it will start dropping frames
-            // discussion here: https://github.com/WebAudio/web-midi-api/issues/158
-            // the best you can do is not blast, but if you do blast, use setInterval/setTimeout and manage the
-            // buffer yourself
-            this.control.sendSysex(0x24, ...message);
-        }
-    }
-
-    setState(state) {
-        this.currentState = state;
-    }
-
-    async disconnect() {
-        this._paintLoop = false;
-        this.reset();
-        this.control.disconnect();
-        this._listeners = [];
-        this.connected = false;
     }
 
     _checkHWBlink(control) {
